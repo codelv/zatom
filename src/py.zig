@@ -385,6 +385,11 @@ pub fn ObjectProtocol(comptime T: type) type {
             c.PyObject_GC_UnTrack(@ptrCast(self));
         }
 
+        // Return a pointer to __dict__ of the object obj. If there is no __dict__,
+        // return NULL without setting an exception.
+        pub fn getDictPtr(self: *T) ?**Dict {
+            return @ptrCast(c._PyObject_GetDictPtr( @ptrCast(self) ) );
+        }
     };
 }
 
@@ -412,6 +417,21 @@ pub const Type = extern struct {
 
     // Import the object protocol
     pub usingnamespace ObjectProtocol(@This());
+
+    // Generic handler for the tp_new slot of a type object.
+    // Create a new instance using the type’s tp_alloc slot.
+    // Returns a new reference
+    pub fn genericNew(self: *Type, args: ?*Tuple, kwargs: ?*Dict) !*Object {
+        if (self.genericNewUnchecked(args, kwargs)) |obj| {
+            return obj;
+        }
+        return error.PyError;
+    }
+
+    // Calls PyType_GenericNew(self, args, kwargs). without error checking
+    pub fn genericNewUnchecked(self: *Type, args: ?*Tuple, kwargs: ?*Dict) ?*Object {
+        return c.PyType_GenericNew(@ptrCast(self), @ptrCast(args), @ptrCast(kwargs));
+    }
 
     // Return true if the object o is a type object, including instances of types derived
     // from the standard type object. Return 0 in all other cases. This function always succeeds.
@@ -619,6 +639,8 @@ pub const List = extern struct {
 
 pub const Dict = extern struct {
     pub const BaseType = c.PyDictObject;
+    // Iteration item
+    pub const Item = struct{key: *Object, value: *Object};
 
     // The underlying python structure
     impl: BaseType,
@@ -637,6 +659,7 @@ pub const Dict = extern struct {
     }
 
     // Return a new empty dictionary, or NULL on failure.
+    // Returns a new reference
     pub fn new() !*Dict {
         if (c.PyDict_New()) |r| {
             return @ptrCast(r);
@@ -644,9 +667,18 @@ pub const Dict = extern struct {
         return error.PyError;
     }
 
+    // Return a new dictionary that contains the same key-value pairs as p.
+    // Returns a new reference
+    pub fn copy(other: *Object) !*Dict {
+        if (c.PyDict_Copy(@ptrCast(other))) |r| {
+            return @ptrCast(r);
+        }
+        return error.PyError;
+    }
+
     // Return a types.MappingProxyType object for a mapping which enforces read-only behavior.
     // This is normally used to create a view to prevent modification of the dictionary for non-dynamic
-    // class types.
+    // class types. Returns a new reference
     pub fn newProxy(mapping: *Object) !*Dict {
         if (c.PyDictProxy_New(@ptrCast(mapping))) |r| {
             return @ptrCast(r);
@@ -654,9 +686,79 @@ pub const Dict = extern struct {
         return error.PyError;
     }
 
+    // Return a borrowed reference to the object from dictionary p which has a key key.
+    // Return NULL if the key key is missing without setting an exception.
+    pub fn get(self: *Dict, key: *Object) ?*Object {
+        return @ptrCast(c.PyDict_GetItem(@ptrCast(self), @ptrCast(key)));
+    }
+
+    pub fn getString(self: *Dict, key: [:0]const u8) ?*Object {
+        return @ptrCast(c.PyDict_GetItemString(@ptrCast(self), @ptrCast(key)));
+    }
+
+    // Remove the entry in dictionary p with key key. key must be hashable; if it isn’t,
+    // TypeError is raised. If key is not in the dictionary, KeyError is raised.
+    // Return 0 on success or -1 on failure.
+    pub fn del(self: *Dict, key: *Object) !void {
+        if (c.PyDict_DelItem(@ptrCast(self), @ptrCast(key))) {
+            return error.PyError;
+        }
+    }
+
+    pub fn delString(self: *Dict, key: [:0]const u8) !void {
+        if (c.PyDict_DelItemString(@ptrCast(self), @ptrCast(key)) < 0) {
+            return error.PyError;
+        }
+    }
+
+    // Iterate over mapping object b adding key-value pairs to dictionary a. b may be a dictionary
+    // If override is true, existing pairs in a will be replaced if a matching key is found in b,
+    // otherwise pairs will only be added if there is not a matching key in a.
+    // Return 0 on success or -1 if an exception was raised.
+    pub fn merge(self: *Dict, other: *Object, override: bool) !void {
+        if (self.mergeUnchecked(other, override) < 0) {
+            return error.PyError;
+        }
+    }
+
+    // Calls PyDict_Merge(self, other, override) without error checking
+    pub fn mergeUnchecked(self: *Dict, other: *Object, override: bool) c_int {
+        return @ptrCast(c.PyDict_Merge(@ptrCast(self), @ptrCast(other), @intFromBool(override)));
+    }
+
+    // This is the same as merge(a, b, 1) in C, and is similar to a.update(b) in Python
+    // except that PyDict_Update() doesn’t fall back to the iterating over a sequence of key
+    // value pairs if the second argument has no “keys” attribute. Return 0 on success or -1
+    // if an exception was raised.
+    pub fn update(self: *Dict, other: *Object) !void {
+        if (self.updateUnchecked(other) < 0) {
+            return error.PyError;
+        }
+    }
+    pub fn updateUnchecked(self: *Dict, other: *Object) c_int {
+        return @ptrCast(c.PyDict_Update(@ptrCast(self), @ptrCast(other)));
+    }
+
     // Empty an existing dictionary of all key-value pairs.
     pub fn clear(self: *Dict) void {
         c.PyDict_Clear(@ptrCast(self));
+    }
+
+    // Same as length but no error checking
+    pub fn size(self: *Dict) isize {
+        return c.PyDict_Size(@ptrCast(self));
+    }
+
+    // Iterate over all key-value pairs in the dictionary p. The Py_ssize_t referred to by ppos must be initialized to 0
+    // prior to the first call to this function to start the iteration;
+    // the function returns true for each pair in the dictionary, and false
+    // once all pairs have been reported.
+    pub fn next(self: *Dict, pos: *isize) ?Item {
+        var item: Item = undefined;
+        if (c.PyDict_Next(@ptrCast(self), pos, &item.key, &item.value)) {
+            return item;
+        }
+        return null;
     }
 
 };

@@ -5,6 +5,8 @@ const Object = py.Object;
 const Str = py.Str;
 const Dict = py.Dict;
 
+const Member = @import("members.zig").Member;
+
 // This is set at startup
 var atom_members_str: ?*Str = null;
 const package_name = @import("api.zig").package_name;
@@ -27,33 +29,67 @@ pub const AtomMeta = extern struct {
         return obj.typeCheck(TypeObject.?);
     }
 
+    // Validate the atom members dict
+    pub fn validate_atom_members(self: *Self, value: *Object) !u16 {
+        _ = self;
+        if (!Dict.check(value)) {
+            _ = py.typeError("atom members must be a dict");
+            return error.PyError;
+        }
+        var pos: isize = 0;
+        const members: *Dict = @ptrCast(value);
+        while (members.next(&pos)) |item| {
+            if (!Str.check(item.key)) {
+                _ = py.typeError("atom members keys must strings");
+                return error.PyError;
+            }
+            if (!Member.check(item.value)) {
+                _ = py.typeError("atom members values must Member");
+                return error.PyError;
+            }
+        }
+        if (pos < 0 or pos > 0xffff) {
+            _ = py.typeError("atom member limit reached");
+            return error.PyError;
+        }
+        return @intCast(pos);
+    }
+
     // Initialize a subclass
     pub fn init_subclass(self: *Self) ?*Object {
         if (self.atom_members == null) {
-
+            // Move __atom_members__ from dict to ptr
+            if (self.getDictPtr()) |dict| {
+                if (dict.get(atom_members_str.?)) |members| {
+                    if (self.set_atom_members(members, null) < 0) {
+                        return null;
+                    }
+                    // Remove from internal dict
+                    dict.del(atom_members_str.?) catch return null;
+                }
+            }
+        }
+        if (self.atom_members == null) {
+            return py.systemError("atom members uninitialized");
         }
         return py.returnNone();
     }
 
     pub fn get_atom_members(self: *Self) ?*Object {
         if (self.atom_members) |members| {
-            return @ptrCast(members.newref());
+            // Return a proxy
+            const proxy = Dict.newProxy(@ptrCast(members)) catch return null;
+            return @ptrCast(proxy);
         }
         return py.systemError("AtomMeta members were not initialized");
     }
 
-    pub fn set_atom_members(self: *Self, value: *Object) c_int {
-        if (!Dict.check(value)) {
-            _ =  py.typeError("Atom members must be a dict");
-            return -1;
-        }
-        _ = self; // TODO
+    pub fn set_atom_members(self: *Self, members: *Object, _: ?*anyopaque) c_int {
+        const count = self.validate_atom_members(members) catch return -1;
+        self.atom_members = @ptrCast(members.newref());
+        self.slot_count = count;
         return 0;
     }
-
-    //pub fn validate_atom_members(self: *Self, membesr: *Object) c_int {
-    //    // TODO
-    //}
 
     pub fn get_member(self: *Self, name: *Object) ?*Object {
         if (!Str.check(name)) {
@@ -65,6 +101,9 @@ pub const AtomMeta = extern struct {
         return py.systemError("Members are not initialized");
     }
 
+    // --------------------------------------------------------------------------
+    // Type definition
+    // --------------------------------------------------------------------------
     pub fn dealloc(self: *Self) void {
         self.gcUntrack();
         _ = self.clear();
@@ -96,8 +135,13 @@ pub const AtomMeta = extern struct {
             .ml_name="get_member",
             .ml_meth=@constCast(@ptrCast(&get_member)),
             .ml_flags=py.c.METH_O,
+            .ml_doc="Get the atom member with the given name"
+        },
+        .{
+            .ml_name="members",
+            .ml_meth=@constCast(@ptrCast(&get_atom_members)),
+            .ml_flags=py.c.METH_NOARGS,
             .ml_doc="Get atom members"
-
         },
         .{} // sentinel
     };
