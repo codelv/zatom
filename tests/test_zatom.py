@@ -1,7 +1,15 @@
 import pytest
-from zatom.api import sum, AtomMeta, Member
+from zatom.api import AtomMeta, Atom, Member
+
 
 def test_atom():
-    assert sum(1,2) == 3
+
+    class A(Atom):
+        pass
+    class B(Atom):
+        m = Member()
+    assert type(A) is not type(B)
+
     with pytest.raises(TypeError):
         AtomMeta.get_member("foo")
+    assert False

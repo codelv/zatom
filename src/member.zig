@@ -3,7 +3,9 @@ const Type = py.Type;
 const Metaclass = py.Metaclass;
 const Object = py.Object;
 const Str = py.Str;
+const Int = py.Int;
 const Dict = py.Dict;
+const Tuple = py.Tuple;
 
 // This is set at startup
 var default_name_str: ?*Str = null;
@@ -19,6 +21,7 @@ pub const Member = extern struct {
 
     base: BaseType,
     name: ?*Str = null,
+    index: u16 = 0,
 
     // Import the object protocol
     pub usingnamespace py.ObjectProtocol(@This());
@@ -28,22 +31,59 @@ pub const Member = extern struct {
         return obj.typeCheck(TypeObject.?);
     }
 
+    pub fn new(cls: *Type, args: *Tuple, kwargs: ?*Dict) ?*Member {
+        const self: *Member = @ptrCast(cls.genericNew(args, kwargs) catch return null);
+        self.name = default_name_str.?.newref();
+        return self;
+    }
+
     pub fn get_name(self: *Member) *Str {
         return self.name.?.newref();
+    }
+
+    pub fn set_name(self: *Member, value: *Object, _: ?*anyopaque) c_int {
+        if (!Str.checkExact(value)) {
+            _ = py.typeError("Member name must be a str");
+            return -1;
+        }
+        py.setref(&self.name, value.newref());
+        Str.internInPlace(&self.name);
+        return 0;
+    }
+
+    pub fn get_index(self: *Member) ?*Int {
+        return Int.fromNumberUnchecked(self.index);
+    }
+
+    pub fn set_index(self: *Member, value: ?*Object, _: ?*anyopaque) c_int {
+        if (value) |v| {
+            const index = v.castExact(Int) catch {
+                _ = py.typeError("Member index must be an int");
+                return -1;
+            };
+            self.index = index.as(u16) catch return 1;
+        }
+        _ = py.typeError("Member index cannot be deleted");
+        return -1;
     }
 
     pub fn get_slot(self: *Member, atom: *Object) ?*Object {
         _ = self;
         _ = atom;
-        return py.returnNone();
+        return py.typeError("Base member has no slots");
     }
 
-//     pub fn set_name(self: *Member, value: *Object) c_int {
-//         if (!Str.check(value)) {
-//             return py.typeError("Member name must be a str");
-//         }
-//         return py.setref(&self.name, value.newref());
-//     }
+    pub fn set_slot(self: *Member, args: [*]Object, n: isize) c_int {
+        _ = self;
+        _ = args;
+        _ = n;
+        return py.typeError("Base member has no slots");
+    }
+
+    pub fn clone(self: *Member) ?*Member {
+        _ = self;
+        return null;
+    }
 
     pub fn dealloc(self: *Self) void {
         self.gcUntrack();
@@ -65,8 +105,14 @@ pub const Member = extern struct {
         .{
             .name="name",
             .get=@ptrCast(&get_name),
-            .set=null,
-            .doc="Get the name to which the member is bound."
+            .set=@ptrCast(&set_name),
+            .doc="Get and set the name to which the member is bound."
+        },
+        .{
+            .name="index",
+            .get=@ptrCast(&get_index),
+            .set=@ptrCast(&set_index),
+            .doc="Get the index to which the member is bound."
         },
         .{} // sentinel
     };
@@ -79,10 +125,18 @@ pub const Member = extern struct {
             .ml_doc="Get slot value directly"
 
         },
+//         .{
+//             .ml_name="clone",
+//             .ml_meth=@constCast(@ptrCast(&clone)),
+//             .ml_flags=py.c.METH_NOARGS,
+//             .ml_doc="Create a copy of the member"
+//
+//         },
         .{} // sentinel
     };
 
-    const slots = [_]py.TypeSlot{
+    const type_slots = [_]py.TypeSlot{
+        .{.slot=py.c.Py_tp_new, .pfunc=@constCast(@ptrCast(&new))},
         .{.slot=py.c.Py_tp_dealloc, .pfunc=@constCast(@ptrCast(&dealloc))},
         .{.slot=py.c.Py_tp_traverse, .pfunc=@constCast(@ptrCast(&traverse))},
         .{.slot=py.c.Py_tp_clear, .pfunc=@constCast(@ptrCast(&clear))},
@@ -93,7 +147,7 @@ pub const Member = extern struct {
         .name=package_name ++ ".Member",
         .basicsize=@sizeOf(Member),
         .flags=(py.c.Py_TPFLAGS_DEFAULT | py.c.Py_TPFLAGS_BASETYPE | py.c.Py_TPFLAGS_HAVE_GC),
-        .slots=@constCast(@ptrCast(&slots)),
+        .slots=@constCast(@ptrCast(&type_slots)),
     };
 
     pub fn initType() !void {
