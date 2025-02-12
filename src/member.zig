@@ -10,6 +10,7 @@ const Tuple = py.Tuple;
 // This is set at startup
 var default_name_str: ?*Str = null;
 
+const AtomBase = @import("atom.zig").AtomBase;
 const package_name = @import("api.zig").package_name;
 
 // Base Member class
@@ -46,8 +47,8 @@ pub const Member = extern struct {
             _ = py.typeError("Member name must be a str");
             return -1;
         }
-        py.setref(&self.name, value.newref());
-        Str.internInPlace(&self.name);
+        py.setref(@ptrCast(&self.name), value.newref());
+        Str.internInPlace(@ptrCast(&self.name));
         return 0;
     }
 
@@ -67,17 +68,40 @@ pub const Member = extern struct {
         return -1;
     }
 
-    pub fn get_slot(self: *Member, atom: *Object) ?*Object {
-        _ = self;
-        _ = atom;
-        return py.typeError("Base member has no slots");
+    pub fn get_slot(self: *Member, atom: *AtomBase) ?*Object {
+        if (!atom.typeCheckSelf()) {
+            return py.typeError("Atom");
+        }
+        if (atom.slotPtr(self.index)) |ptr| {
+            return ptr.*;
+        }
+        return py.attributeError("No slot");
     }
 
-    pub fn set_slot(self: *Member, args: [*]Object, n: isize) c_int {
-        _ = self;
-        _ = args;
-        _ = n;
-        return py.typeError("Base member has no slots");
+    pub fn set_slot(self: *Member, args: [*]*Object, n: isize) ?*Object {
+        if (n != 2) {
+            return py.attributeError("set_slot takes 2 arguments");
+        }
+        const atom: *AtomBase = @ptrCast(args[0]);
+        if (!atom.typeCheckSelf()) {
+            return py.typeError("Atom");
+        }
+        if (atom.slotPtr(self.index)) |ptr| {
+            ptr.* = args[1];
+            return py.returnNone();
+        }
+        return py.attributeError("No slot");
+    }
+
+    pub fn del_slot(self: *Member, atom: *AtomBase) ?*Object {
+        if (!atom.typeCheckSelf()) {
+            return py.typeError("Atom");
+        }
+        if (atom.slotPtr(self.index)) |ptr| {
+            ptr.* = null;
+            return py.returnNone();
+        }
+        return py.attributeError("No slot");
     }
 
     pub fn clone(self: *Member) ?*Member {
@@ -102,52 +126,39 @@ pub const Member = extern struct {
     }
 
     const getset = [_]py.GetSetDef{
-        .{
-            .name="name",
-            .get=@ptrCast(&get_name),
-            .set=@ptrCast(&set_name),
-            .doc="Get and set the name to which the member is bound."
-        },
-        .{
-            .name="index",
-            .get=@ptrCast(&get_index),
-            .set=@ptrCast(&set_index),
-            .doc="Get the index to which the member is bound."
-        },
-        .{} // sentinel
+        .{ .name = "name", .get = @ptrCast(&get_name), .set = @ptrCast(&set_name), .doc = "Get and set the name to which the member is bound." },
+        .{ .name = "index", .get = @ptrCast(&get_index), .set = @ptrCast(&set_index), .doc = "Get the index to which the member is bound." },
+        .{}, // sentinel
     };
 
     const methods = [_]py.MethodDef{
-        .{
-            .ml_name="get_slot",
-            .ml_meth=@constCast(@ptrCast(&get_slot)),
-            .ml_flags=py.c.METH_O,
-            .ml_doc="Get slot value directly"
-
-        },
-//         .{
-//             .ml_name="clone",
-//             .ml_meth=@constCast(@ptrCast(&clone)),
-//             .ml_flags=py.c.METH_NOARGS,
-//             .ml_doc="Create a copy of the member"
-//
-//         },
-        .{} // sentinel
+        .{ .ml_name = "get_slot", .ml_meth = @constCast(@ptrCast(&get_slot)), .ml_flags = py.c.METH_O, .ml_doc = "Get slot value directly" },
+        .{ .ml_name = "set_slot", .ml_meth = @constCast(@ptrCast(&set_slot)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Set slot value directly" },
+        .{ .ml_name = "del_slot", .ml_meth = @constCast(@ptrCast(&del_slot)), .ml_flags = py.c.METH_O, .ml_doc = "Del slot value directly" },
+        //         .{
+        //             .ml_name="clone",
+        //             .ml_meth=@constCast(@ptrCast(&clone)),
+        //             .ml_flags=py.c.METH_NOARGS,
+        //             .ml_doc="Create a copy of the member"
+        //
+        //         },
+        .{}, // sentinel
     };
 
     const type_slots = [_]py.TypeSlot{
-        .{.slot=py.c.Py_tp_new, .pfunc=@constCast(@ptrCast(&new))},
-        .{.slot=py.c.Py_tp_dealloc, .pfunc=@constCast(@ptrCast(&dealloc))},
-        .{.slot=py.c.Py_tp_traverse, .pfunc=@constCast(@ptrCast(&traverse))},
-        .{.slot=py.c.Py_tp_clear, .pfunc=@constCast(@ptrCast(&clear))},
-        .{.slot=py.c.Py_tp_methods, .pfunc=@constCast(@ptrCast(&methods))},
-        .{} // sentinel
+        .{ .slot = py.c.Py_tp_new, .pfunc = @constCast(@ptrCast(&new)) },
+        .{ .slot = py.c.Py_tp_dealloc, .pfunc = @constCast(@ptrCast(&dealloc)) },
+        .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
+        .{ .slot = py.c.Py_tp_clear, .pfunc = @constCast(@ptrCast(&clear)) },
+        .{ .slot = py.c.Py_tp_methods, .pfunc = @constCast(@ptrCast(&methods)) },
+        .{ .slot = py.c.Py_tp_getset, .pfunc = @constCast(@ptrCast(&getset)) },
+        .{}, // sentinel
     };
     pub var TypeSpec = py.TypeSpec{
-        .name=package_name ++ ".Member",
-        .basicsize=@sizeOf(Member),
-        .flags=(py.c.Py_TPFLAGS_DEFAULT | py.c.Py_TPFLAGS_BASETYPE | py.c.Py_TPFLAGS_HAVE_GC),
-        .slots=@constCast(@ptrCast(&type_slots)),
+        .name = package_name ++ ".Member",
+        .basicsize = @sizeOf(Member),
+        .flags = (py.c.Py_TPFLAGS_DEFAULT | py.c.Py_TPFLAGS_BASETYPE | py.c.Py_TPFLAGS_HAVE_GC),
+        .slots = @constCast(@ptrCast(&type_slots)),
     };
 
     pub fn initType() !void {
@@ -158,11 +169,7 @@ pub const Member = extern struct {
     pub fn deinitType() void {
         py.clear(@ptrCast(&TypeObject));
     }
-
 };
-
-
-
 
 pub fn initModule(mod: *py.Module) !void {
     default_name_str = try py.Str.internFromString("<undefined>");

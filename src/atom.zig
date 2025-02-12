@@ -18,15 +18,7 @@ var frozen_str: ?*Str = null;
 // These are generated a compt
 pub var atom_types = [_]?*Type{null} ** MAX_INLINE_SLOT_COUNT;
 
-pub const AtomInfo = packed struct {
-    slot_count: u16 = 0,
-    notifications_disabled: bool = false,
-    has_guards: bool = false,
-    has_atomref: bool = false,
-    has_observers: bool = false,
-    is_frozen: bool = false,
-    _reserved: u11 = 0
-};
+pub const AtomInfo = packed struct { slot_count: u16 = 0, notifications_disabled: bool = false, has_guards: bool = false, has_atomref: bool = false, has_observers: bool = false, is_frozen: bool = false, _reserved: u11 = 0 };
 
 // Base Atom class
 pub const AtomBase = extern struct {
@@ -39,6 +31,8 @@ pub const AtomBase = extern struct {
     info: AtomInfo,
     slots: [1]?*Object,
 
+    pub usingnamespace py.ObjectProtocol(Self);
+
     pub fn new(cls: *Type, args: *Tuple, kwargs: ?*Dict) ?*Self {
         if (!AtomMeta.check(@ptrCast(cls))) {
             return @ptrCast(py.typeError("atom meta"));
@@ -50,7 +44,7 @@ pub const AtomBase = extern struct {
     }
 
     pub fn init(self: *Self, args: *Tuple, kwargs: ?*Dict) c_int {
-        if (args.sizeUnsafe() > 0 ) {
+        if (args.sizeUnsafe() > 0) {
             _ = py.typeError("__init__() takes no positional arguments");
             return -1;
         }
@@ -115,29 +109,29 @@ pub const AtomBase = extern struct {
     }
 
     const methods = [_]py.MethodDef{
-//         .{
-//             .ml_name="init_subclass",
-//             .ml_meth=@constCast(@ptrCast(&init_subclass)),
-//             .ml_flags=py.c.METH_CLASS | py.c.METH_NOARGS,
-//             .ml_doc="Initialize the atom_members for the subclass"
-//
-//         },
-        .{} // sentinel
+        //         .{
+        //             .ml_name="init_subclass",
+        //             .ml_meth=@constCast(@ptrCast(&init_subclass)),
+        //             .ml_flags=py.c.METH_CLASS | py.c.METH_NOARGS,
+        //             .ml_doc="Initialize the atom_members for the subclass"
+        //
+        //         },
+        .{}, // sentinel
     };
     const type_slots = [_]py.TypeSlot{
-        .{.slot=py.c.Py_tp_new, .pfunc=@constCast(@ptrCast(&new))},
-        .{.slot=py.c.Py_tp_init, .pfunc=@constCast(@ptrCast(&init))},
-        .{.slot=py.c.Py_tp_dealloc, .pfunc=@constCast(@ptrCast(&dealloc))},
-        .{.slot=py.c.Py_tp_traverse, .pfunc=@constCast(@ptrCast(&traverse))},
-        .{.slot=py.c.Py_tp_clear, .pfunc=@constCast(@ptrCast(&clear))},
-        .{.slot=py.c.Py_tp_methods, .pfunc=@constCast(@ptrCast(&methods))},
-        .{} // sentinel
+        //.{.slot=py.c.Py_tp_new, .pfunc=@constCast(@ptrCast(&new))},
+        .{ .slot = py.c.Py_tp_init, .pfunc = @constCast(@ptrCast(&init)) },
+        .{ .slot = py.c.Py_tp_dealloc, .pfunc = @constCast(@ptrCast(&dealloc)) },
+        .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
+        .{ .slot = py.c.Py_tp_clear, .pfunc = @constCast(@ptrCast(&clear)) },
+        .{ .slot = py.c.Py_tp_methods, .pfunc = @constCast(@ptrCast(&methods)) },
+        .{}, // sentinel
     };
     pub var TypeSpec = py.TypeSpec{
-        .name=package_name ++ ".AtomBase",
-        .basicsize=@sizeOf(AtomBase),
-        .flags=(py.c.Py_TPFLAGS_DEFAULT | py.c.Py_TPFLAGS_BASETYPE | py.c.Py_TPFLAGS_HAVE_GC),
-        .slots=@constCast(@ptrCast(&type_slots)),
+        .name = package_name ++ ".AtomBase",
+        .basicsize = @sizeOf(AtomBase),
+        .flags = (py.c.Py_TPFLAGS_DEFAULT | py.c.Py_TPFLAGS_BASETYPE | py.c.Py_TPFLAGS_HAVE_GC),
+        .slots = @constCast(@ptrCast(&type_slots)),
     };
 
     pub fn initType() !void {
@@ -146,6 +140,9 @@ pub const AtomBase = extern struct {
             _ = py.systemError("AtomMeta type not ready");
             return error.PyError;
         }
+        // Hack to bypass the metaclass check
+        AtomMeta.disableNew();
+        defer AtomMeta.enableNew();
         TypeObject = try Type.fromMetaclass(AtomMeta.TypeObject, null, &TypeSpec, null);
     }
 
@@ -159,7 +156,6 @@ comptime {
     if (size != 40) {
         @compileLog("Expected 40 bytes got {}", .{size});
     }
-
 }
 // Generate a type that extends the AtomBase with inlined slots
 pub fn Atom(comptime slot_count: u16) type {
@@ -193,7 +189,7 @@ pub fn Atom(comptime slot_count: u16) type {
             const r = self.base.clear();
             if (r != 0)
                 return r;
-            inline for(0..self.slots.len) |i| {
+            inline for (0..self.slots.len) |i| {
                 py.clear(&self.slots[i]);
             }
             return 0;
@@ -207,30 +203,31 @@ pub fn Atom(comptime slot_count: u16) type {
         }
 
         const type_slots = [_]py.TypeSlot{
-            .{.slot=py.c.Py_tp_dealloc, .pfunc=@constCast(@ptrCast(&dealloc))},
-            .{.slot=py.c.Py_tp_traverse, .pfunc=@constCast(@ptrCast(&traverse))},
-            .{.slot=py.c.Py_tp_clear, .pfunc=@constCast(@ptrCast(&clear))},
-            .{} // sentinel
+            .{ .slot = py.c.Py_tp_dealloc, .pfunc = @constCast(@ptrCast(&dealloc)) },
+            .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
+            .{ .slot = py.c.Py_tp_clear, .pfunc = @constCast(@ptrCast(&clear)) },
+            .{}, // sentinel
         };
         pub var TypeSpec = py.TypeSpec{
-            .name=package_name ++ std.fmt.comptimePrint(".Atom{}", .{slot_count}),
-            .basicsize=@sizeOf(Self),
-            .flags=(py.c.Py_TPFLAGS_DEFAULT | py.c.Py_TPFLAGS_BASETYPE | py.c.Py_TPFLAGS_HAVE_GC),
-            .slots=@constCast(@ptrCast(&type_slots)),
+            .name = package_name ++ std.fmt.comptimePrint(".Atom{}", .{slot_count}),
+            .basicsize = @sizeOf(Self),
+            .flags = (py.c.Py_TPFLAGS_DEFAULT | py.c.Py_TPFLAGS_BASETYPE | py.c.Py_TPFLAGS_HAVE_GC),
+            .slots = @constCast(@ptrCast(&type_slots)),
         };
 
         pub fn initType() !void {
             if (TypeObject != null) return;
+            // Hack to bypass the metaclass check
+            AtomMeta.disableNew();
+            defer AtomMeta.enableNew();
             TypeObject = try Type.fromSpecWithBases(&TypeSpec, @ptrCast(AtomBase.TypeObject));
         }
 
         pub fn deinitType() void {
             py.clear(@ptrCast(&TypeObject));
         }
-
     };
 }
-
 
 pub fn initModule(mod: *py.Module) !void {
     frozen_str = try py.Str.internFromString("--frozen");
@@ -239,9 +236,9 @@ pub fn initModule(mod: *py.Module) !void {
     errdefer AtomBase.deinitType();
 
     // Initialize types with fixed slots
-    atom_types[0] = AtomBase.TypeObject.incref();
-    atom_types[1] = AtomBase.TypeObject.incref();
-    inline for(2..atom_types.len) |i| {
+    atom_types[0] = AtomBase.TypeObject.?.newref();
+    atom_types[1] = AtomBase.TypeObject.?.newref();
+    inline for (2..atom_types.len) |i| {
         const T = Atom(i);
         try T.initType();
         errdefer T.deinitType();
@@ -257,7 +254,7 @@ pub fn deinitModule(mod: *py.Module) void {
 
     py.clear(@ptrCast(&atom_types[0]));
     py.clear(@ptrCast(&atom_types[1]));
-    inline for(2..atom_types.len) |i| {
+    inline for (2..atom_types.len) |i| {
         // Clear the type slot
         py.clear(@ptrCast(&atom_types[i]));
         Atom(i).deinitType();
@@ -265,4 +262,3 @@ pub fn deinitModule(mod: *py.Module) void {
     AtomBase.deinitType();
     _ = mod; // TODO: Remove dead type
 }
-

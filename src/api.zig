@@ -36,12 +36,12 @@ pub export fn atom_modexec(mod: *py.Module) c_int {
 }
 
 var module_methods = [_]py.MethodDef{
-    .{} // sentinel
+    .{}, // sentinel
 };
 
 var module_slots = [_]py.SlotDef{
-    .{.slot = c.Py_mod_exec, .value = @constCast(@ptrCast(&atom_modexec))},
-    .{} // sentinel
+    .{ .slot = c.Py_mod_exec, .value = @constCast(@ptrCast(&atom_modexec)) },
+    .{}, // sentinel
 };
 
 pub var moduledef = py.ModuleDef.new(.{
@@ -51,6 +51,6 @@ pub var moduledef = py.ModuleDef.new(.{
     .m_slots = &module_slots,
 });
 
-pub export fn PyInit_api( _:*anyopaque ) [*c]Object {
+pub export fn PyInit_api(_: *anyopaque) [*c]Object {
     return moduledef.init();
 }

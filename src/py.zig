@@ -11,13 +11,10 @@ pub const False = c.Py_False;
 const VER_312 = 0x030C0000;
 const VER_313 = 0x030D0000;
 
-pub const VersionOp = enum {gt, gte, lt, lte, eq, ne};
+pub const VersionOp = enum { gt, gte, lt, lte, eq, ne };
 
 // Return true if the compile version is over the given value
-pub fn versionCheck(
-    comptime op: VersionOp,
-    comptime version: c_int
-) bool {
+pub fn versionCheck(comptime op: VersionOp, comptime version: c_int) bool {
     const py_ver = c.PY_VERSION_HEX;
     return switch (op) {
         .gt => py_ver > version,
@@ -42,8 +39,8 @@ pub fn finalize() !void {
 // If not set, return NULL. You do not own a reference to the return value, so you do not
 // need to Py_DECREF() it.
 // The caller must hold the GIL.
-pub fn errorOcurred() ?*Object {
-    return c.PyErr_Ocurred();
+pub fn errorOccurred() ?*Object {
+    return @ptrCast(c.PyErr_Occurred());
 }
 
 // Clear the error indicator. If the error indicator is not set, there is no effect.
@@ -57,7 +54,7 @@ pub fn errorClear() void {
 // Call this function only when the error indicator is set.
 // Otherwise it will cause a fatal error!
 pub fn errorPrint() void {
-    if (errorOcurred()) {
+    if (errorOccurred()) {
         errorPrintUnchecked();
     }
 }
@@ -72,7 +69,7 @@ pub fn errorString(msg: [:0]const u8) void {
 }
 
 pub fn errorFormat(exc: *Object, msg: [:0]const u8, args: anytype) ?*Object {
-    return @call(.auto, c.PyErr_Format, .{@as([*c]c.PyObject, @ptrCast(exc)), msg.ptr}++args);
+    return @call(.auto, c.PyErr_Format, .{ @as([*c]c.PyObject, @ptrCast(exc)), msg.ptr } ++ args);
 }
 
 // Helper that is the equivalent to `TypeError(msg)`
@@ -90,6 +87,11 @@ pub fn systemError(msg: [:0]const u8) ?*Object {
 // Helper that is the equivalent to `ValueError(msg)`
 pub fn valueError(msg: [:0]const u8) ?*Object {
     c.PyErr_SetString(c.PyExc_ValueError, @ptrCast(msg));
+    return null;
+}
+
+pub fn attributeError(msg: [:0]const u8) ?*Object {
+    c.PyErr_SetString(c.PyExc_AttributeError, @ptrCast(msg));
     return null;
 }
 
@@ -136,7 +138,7 @@ pub fn visit(obj: ?*Object, func: visitproc, arg: ?*anyopaque) c_int {
 
 // Invoke the visitor func on all non-null objects and return the first nonzero result if any.
 pub fn visitAll(objects: anytype, func: visitproc, arg: ?*anyopaque) c_int {
-    inline for(objects) |obj| {
+    inline for (objects) |obj| {
         if (obj) |p| {
             const r = func.?(@ptrCast(p), arg);
             if (r != 0) return r;
@@ -158,22 +160,15 @@ pub fn xsetref(dst: *?*Object, src: ?*Object) void {
     dst.* = src;
 }
 
-pub fn parseTupleAndKeywords(
-    args: *Tuple,
-    kwargs: ?*Dict,
-    format: [:0]const u8,
-    keywords: [*c]const [*c]u8,
-    results: anytype
-) !void {
-    const r = @call(.auto,
-        c.PyArg_ParseTupleAndKeywords, .{
-            @as([*c]c.PyObject, @ptrCast(args)),
-            @as([*c]c.PyObject, @ptrCast(kwargs)),
-            format,
-            keywords,
-        } ++ results
-    );
-    if (r == 0 ) return error.PyError;
+pub fn parseTupleAndKeywords(args: *Tuple, kwargs: ?*Dict, format: [:0]const u8, keywords: [*c]const [*c]u8, results: anytype) !void {
+    if (@call(.auto, c.PyArg_ParseTupleAndKeywords, .{
+        @as([*c]c.PyObject, @ptrCast(args)),
+        @as([*c]c.PyObject, @ptrCast(kwargs)),
+        format,
+        keywords,
+    } ++ results) == 0) {
+        return error.PyError;
+    }
 }
 
 // Object Protocol
@@ -218,26 +213,26 @@ pub fn ObjectProtocol(comptime T: type) type {
         }
 
         pub fn hasAttrStringWithError(self: *Object, attr: [:0]const u8) !bool {
-            const r = c.PyObject_HasAttrWithError( @ptrCast(self), @ptrCast(attr) );
+            const r = c.PyObject_HasAttrWithError(@ptrCast(self), @ptrCast(attr));
             if (r < 0) return error.PyError;
             return r == 1;
         }
 
         pub fn getAttr(self: *T, attr: *Str) !*Object {
-            const r = c.PyObject_GetAttr( @ptrCast(self), @ptrCast(attr) );
+            const r = c.PyObject_GetAttr(@ptrCast(self), @ptrCast(attr));
             if (r == 0) return error.PyError;
             return r;
         }
 
         pub fn getAttrString(self: *T, attr: [:0]const u8) !*Object {
-            const r = c.PyObject_GetAttrString( @ptrCast(self), @ptrCast(attr) );
+            const r = c.PyObject_GetAttrString(@ptrCast(self), @ptrCast(attr));
             if (r == 0) return error.PyError;
             return r;
         }
 
         pub fn getAttrOptional(self: *T, attr: *Str) !?*Object {
             var result: ?*Object = undefined;
-            const r = c.PyObject_GetOptionalAttr( @ptrCast(self), @ptrCast(attr), @ptrCast(&result) );
+            const r = c.PyObject_GetOptionalAttr(@ptrCast(self), @ptrCast(attr), @ptrCast(&result));
             if (r == -1) return error.PyError;
             return result;
         }
@@ -247,14 +242,14 @@ pub fn ObjectProtocol(comptime T: type) type {
         // If v is NULL, the attribute is deleted. This behaviour is deprecated in favour of using
         // PyObject_DelAttr(), but there are currently no plans to remove it.
         pub fn setAttr(self: *T, attr: *Str, value: ?*Object) !void {
-            if (c.PyObject_SetAttr( @ptrCast(self), @ptrCast(attr), @ptrCast(value) ) < 0) {
+            if (c.PyObject_SetAttr(@ptrCast(self), @ptrCast(attr), @ptrCast(value)) < 0) {
                 return error.PyError;
             }
         }
 
         // Same as setAttr but attr is a [:0]const u8.
         pub fn setAttrString(self: *T, attr: [:0]const u8, value: ?*Object) !void {
-            if (c.PyObject_SetAttrString( @ptrCast(self), attr, @ptrCast(value) ) < 0) {
+            if (c.PyObject_SetAttrString(@ptrCast(self), attr, @ptrCast(value)) < 0) {
                 return error.PyError;
             }
         }
@@ -262,14 +257,14 @@ pub fn ObjectProtocol(comptime T: type) type {
         // Delete attribute named attr_name, for object o.
         // This is the equivalent of the Python statement del o.attr_name.
         pub fn delAttr(self: *T, attr: *Str) !void {
-            if (c.PyObject_DelAttr( @ptrCast(self), @ptrCast(attr) ) < 0) {
+            if (c.PyObject_DelAttr(@ptrCast(self), @ptrCast(attr)) < 0) {
                 return error.PyError;
             }
         }
 
         // Same as detAttr but attr is a [:0]const u8.
         pub fn delAttrString(self: *T, attr: [:0]const u8) !void {
-            if (c.PyObject_DelAttrString( @ptrCast(self), attr ) < 0) {
+            if (c.PyObject_DelAttrString(@ptrCast(self), attr) < 0) {
                 return error.PyError;
             }
         }
@@ -298,49 +293,6 @@ pub fn ObjectProtocol(comptime T: type) type {
                 return error.PyError;
             }
             return r;
-        }
-
-        // Return element of o corresponding to the object key or NULL on failure.
-        // This is the equivalent of the Python expression o[key].
-        // Returns a New reference.
-        pub fn getItem(self: *T, key: *Object) !*Object {
-            if (self.getItemUnchecked(key)) |item| {
-                return @ptrCast(item);
-            }
-            return error.PyError;
-        }
-
-        // Calls PyObject_GetItem(self, key). Same as getItem with no error checking.
-        // Returns a New reference.
-        pub fn getItemUnchecked(self: *T, key: *Object) ?*Object {
-            return @ptrCast( c.PyObject_GetItem( @ptrCast(self), @ptrCast(key) ) );
-        }
-
-        // Map the object key to the value v.
-        // This is the equivalent of the Python statement o[key] = v.
-        // This function does not steal a reference to v.
-        pub fn setItem(self: *T, key: *Object, value: *Object) !void {
-            if (self.setItemUnchecked(key, value) < 0) {
-                return error.PyError;
-            }
-        }
-
-        // Same as setItem without error checking
-        pub fn setItemUnchecked(self: *T, key: *Object, value: *Object) c_int {
-            return c.PyObject_SetItem( @ptrCast(self), @ptrCast(key), @ptrCast(value) );
-        }
-
-        // Remove the mapping for the object key from the object o.
-        // This is equivalent to the Python statement del o[key].
-        pub fn delItem(self: *T, key: *Object) !void {
-            if (self.delItemUnchecked(key) < 0) {
-                return error.PyError;
-            }
-        }
-
-        // Same as delItem without error checking
-        pub fn delItemUnchecked(self: *T, key: *Object) c_int {
-            return c.PyObject_DelItem( @ptrCast(self), @ptrCast(key) );
         }
 
         // This is equivalent to the Python expression iter(o).
@@ -478,11 +430,61 @@ pub fn ObjectProtocol(comptime T: type) type {
         // Return a pointer to __dict__ of the object obj. If there is no __dict__,
         // return NULL without setting an exception.
         pub fn getDictPtr(self: *T) ?**Dict {
-            return @ptrCast(c._PyObject_GetDictPtr( @ptrCast(self) ) );
+            return @ptrCast(c._PyObject_GetDictPtr(@ptrCast(self)));
         }
+
+        // Add the mapping protocol
+        pub usingnamespace MappingProtocol(T);
 
         // Add the call protocol
         pub usingnamespace CallProtocol(T);
+    };
+}
+
+pub fn MappingProtocol(comptime T: type) type {
+    return struct {
+        // Return element of o corresponding to the object key or NULL on failure.
+        // This is the equivalent of the Python expression o[key].
+        // Returns a New reference.
+        pub fn getItem(self: *T, key: *Object) !*Object {
+            if (self.getItemUnchecked(key)) |item| {
+                return @ptrCast(item);
+            }
+            return error.PyError;
+        }
+
+        // Calls PyObject_GetItem(self, key). Same as getItem with no error checking.
+        // Returns a New reference.
+        pub fn getItemUnchecked(self: *T, key: *Object) ?*Object {
+            return @ptrCast(c.PyObject_GetItem(@ptrCast(self), @ptrCast(key)));
+        }
+
+        // Map the object key to the value v.
+        // This is the equivalent of the Python statement o[key] = v.
+        // This function does not steal a reference to v.
+        pub fn setItem(self: *T, key: *Object, value: *Object) !void {
+            if (self.setItemUnchecked(key, value) < 0) {
+                return error.PyError;
+            }
+        }
+
+        // Same as setItem without error checking
+        pub fn setItemUnchecked(self: *T, key: *Object, value: *Object) c_int {
+            return c.PyObject_SetItem(@ptrCast(self), @ptrCast(key), @ptrCast(value));
+        }
+
+        // Remove the mapping for the object key from the object o.
+        // This is equivalent to the Python statement del o[key].
+        pub fn delItem(self: *T, key: *Object) !void {
+            if (self.delItemUnchecked(key) < 0) {
+                return error.PyError;
+            }
+        }
+
+        // Same as delItem without error checking
+        pub fn delItemUnchecked(self: *T, key: *Object) c_int {
+            return c.PyObject_DelItem(@ptrCast(self), @ptrCast(key));
+        }
     };
 }
 
@@ -519,9 +521,15 @@ pub fn CallProtocol(comptime T: type) type {
         // Return the result of the call on success, or raise an exception and return NULL on failure.
         pub fn callArgsUnchecked(self: *T, args: anytype) ?*Object {
             return @ptrCast(switch (args.len) {
-                0 =>  c.PyObject_CallNoArgs(@ptrCast(self)),
+                0 => c.PyObject_CallNoArgs(@ptrCast(self)),
                 1 => c.PyObject_CallOneArg(@ptrCast(self), @ptrCast(args[0])),
-                else => c.PyObject_Vectorcall(@ptrCast(self), args, args.len, null),
+                else => blk: {
+                    var objs: [args.len][*c]c.PyObject = undefined;
+                    inline for (args, 0..) |arg, i| {
+                        objs[i] = @ptrCast(arg);
+                    }
+                    break :blk c.PyObject_Vectorcall(@ptrCast(self), @ptrCast(&objs), objs.len, null);
+                },
             });
         }
 
@@ -564,7 +572,6 @@ pub fn CallProtocol(comptime T: type) type {
                         objs[i] = @ptrCast(arg);
                     }
                     break :blk c.PyObject_VectorcallMethod(@ptrCast(name), @ptrCast(&objs), objs.len, null);
-
                 },
             });
         }
@@ -579,9 +586,8 @@ pub fn CallProtocol(comptime T: type) type {
         }
 
         pub fn vectorCallUnchecked(self: *T, args: anytype, kwnames: ?*Object) ?*Object {
-            return @ptrCast( c.PyObject_Vectorcall(@ptrCast(self), args, args.len, kwnames));
+            return @ptrCast(c.PyObject_Vectorcall(@ptrCast(self), args, args.len, kwnames));
         }
-
 
         pub fn vectorCallMethod(self: *T, name: *Str, args: anytype, kwnames: ?*Object) !*Object {
             if (self.vectorCallMethodUnchecked(name, args, kwnames)) |r| {
@@ -591,14 +597,10 @@ pub fn CallProtocol(comptime T: type) type {
         }
 
         pub fn vectorCallMethodUnchecked(self: *T, name: *Str, args: anytype, kwnames: ?*Object) ?*Object {
-            return @ptrCast( c.PyObject_Vectorcall(@ptrCast(name), .{self} + args, args.len + 1, kwnames));
+            return @ptrCast(c.PyObject_Vectorcall(@ptrCast(name), .{self} + args, args.len + 1, kwnames));
         }
     };
 }
-
-
-pub const TypeSlot = c.PyType_Slot;
-pub const TypeSpec = c.PyType_Spec;
 
 pub const Object = extern struct {
     pub const BaseType = c.PyObject;
@@ -613,7 +615,7 @@ pub const Object = extern struct {
     // If the check fails this returns error.PyCastError and but does. NOT set a python error.
     pub fn cast(self: *Object, comptime T: type) !*T {
         if (T.check(self)) {
-             return @ptrCast(self);
+            return @ptrCast(self);
         }
         return error.PyCastError; // Does not set a python error!
     }
@@ -627,7 +629,8 @@ pub const Object = extern struct {
     }
 };
 
-
+pub const TypeSlot = c.PyType_Slot;
+pub const TypeSpec = c.PyType_Spec;
 
 pub const Type = extern struct {
     pub const BaseType = c.PyTypeObject;
@@ -642,9 +645,9 @@ pub const Type = extern struct {
     // This is equivalent to the Python expression:  type.__new__(self, name, bases, dict)
     // Returns new reference
     pub fn new(meta: *Type, name: *Str, bases: *Tuple, dict: *Dict) !*Object {
-        const builtin_type: *Object  = @ptrCast(&c.PyType_Type);
+        const builtin_type: *Object = @ptrCast(&c.PyType_Type);
         const new_str = try Str.internFromString("__new__");
-        return try builtin_type.callMethod(new_str, .{meta, name, bases, dict});
+        return try builtin_type.callMethod(new_str, .{ meta, name, bases, dict });
     }
 
     // Generic handler for the tp_new slot of a type object.
@@ -680,7 +683,7 @@ pub const Type = extern struct {
     // Metaclasses that override tp_new are not supported, except if tp_new is NULL. (For backwards compatibility, other PyType_From* functions allow such metaclasses. They ignore tp_new, which may result in incomplete initialization. This is deprecated and in Python 3.14+ such metaclasses will not be supported.)
     // The bases argument can be used to specify base classes; it can either be only one class or a tuple of classes. If bases is NULL, the Py_tp_bases slot is used instead. If that also is NULL, the Py_tp_base slot is used instead. If that also is NULL, the new type derives from object.
     // The module argument can be used to record the module in which the new class is defined. It must be a module object or NULL. If not NULL, the module is associated with the new type and can later be retrieved with PyType_GetModule(). The associated module is not inherited by subclasses; it must be specified for each class individually.
-    pub fn fromMetaclass(meta: ?*Type, module: ?*Module, spec: *TypeSpec, bases: ?*Object ) !*Type {
+    pub fn fromMetaclass(meta: ?*Type, module: ?*Module, spec: *TypeSpec, bases: ?*Object) !*Type {
         if (c.PyType_FromMetaclass(@ptrCast(meta), @ptrCast(module), @ptrCast(spec), @ptrCast(bases))) |o| {
             return @ptrCast(o);
         }
@@ -702,18 +705,14 @@ pub const Type = extern struct {
         }
         return error.PyError;
     }
-
 };
-
 
 pub const Metaclass = extern struct {
     pub const BaseType = c.PyHeapTypeObject;
     impl: BaseType,
     // Import the object protocol
     pub usingnamespace ObjectProtocol(@This());
-
 };
-
 
 pub const Bool = extern struct {
     pub const BaseType = c.PyLongObject;
@@ -735,9 +734,7 @@ pub const Bool = extern struct {
     pub fn fromBool(value: bool) ?*Bool {
         return fromLong(@intFromBool(value));
     }
-
 };
-
 
 pub const Int = extern struct {
     pub const BaseType = c.PyLongObject;
@@ -748,34 +745,40 @@ pub const Int = extern struct {
     // Import the object protocol
     pub usingnamespace ObjectProtocol(@This());
 
+    // Return true if its argument is a PyLongObject or a subtype of PyLongObject. This function always succeeds.
+    pub fn check(obj: *Object) bool {
+        return c.PyLong_Check(@as([*c]c.PyObject, @ptrCast(obj))) != 0;
+    }
+
+    // Return true if its argument is a PyLongObject, but not a subtype of PyLongObject. This function always succeeds.
+    pub fn checkExact(obj: *Object) bool {
+        return c.PyLong_CheckExact(@as([*c]c.PyObject, @ptrCast(obj))) != 0;
+    }
+
     // Convert to the given zig type
     pub fn as(self: *Int, comptime T: type) !T {
         comptime var error_value = -1;
         const n = @bitSizeOf(c_long);
-        const r: T = switch(@typeInfo(T)) {
+        const r: T = switch (@typeInfo(T)) {
             .Int => |info| switch (info.bits) {
-                0...n => @intCast(
-                    if (info.signed)
-                        c.PyLong_AsLong(@ptrCast(self))
-                    else blk: {
-                        error_value = @as(c_ulong, -1); // Update error value
-                        break :blk c.PyLong_AsUnsignedLong(@ptrCast(self));
-                    }
-                ),
-                else => @intCast(
-                    if (info.signed)
-                        c.PyLong_AsLongLong(@ptrCast(self))
-                    else blk: {
-                        error_value = @as(c_ulonglong, -1); // Update error value
-                        break :blk c.PyLong_AsUnsignedLongLong(@ptrCast(self));
-                    }
-                ),
+                0...n => @intCast(if (info.signedness == .signed)
+                    c.PyLong_AsLong(@ptrCast(self))
+                else blk: {
+                    error_value = std.math.maxInt(c_ulong); // Update error value
+                    break :blk c.PyLong_AsUnsignedLong(@ptrCast(self));
+                }),
+                else => @intCast(if (info.signedness == .signed)
+                    c.PyLong_AsLongLong(@ptrCast(self))
+                else blk: {
+                    error_value = std.math.maxInt(c_ulonglong); // Update error value
+                    break :blk c.PyLong_AsUnsignedLongLong(@ptrCast(self));
+                }),
             },
             .Float => @floatCast(c.PyLong_AsDouble(@ptrCast(self))),
             else => @compileError("Cannot convert python in to " ++ @typeName(T)),
         };
 
-        if (r == error_value and errorOcurred() != null) {
+        if (r == error_value and errorOccurred() != null) {
             return error.PyError;
         }
         return r;
@@ -805,20 +808,23 @@ pub const Int = extern struct {
         }
         const n1 = @bitSizeOf(c_long);
         const n2 = @bitSizeOf(c_longlong);
+
         switch (@typeInfo(T)) {
-            .Int => |info| switch (info.bits) {
-                0...n1 => return @ptrCast(
-                    if (info.signedness == .signed)
-                        c.PyLong_FromLong(@intCast(value))
-                    else
-                        c.PyLong_FromUnsignedLong(@intCast(value))
-                ),
-                n1...n2 => return @ptrCast(
-                    if (info.signedness == .signed)
-                        c.PyLong_FromLongLong(@intCast(value))
-                    else
-                        c.PyLong_FromUnsignedLongLong(@intCast(value))
-                ),
+            .Int => |info| if (n1 == n2) switch (info.bits) {
+                0...n1 => return @ptrCast(if (info.signedness == .signed)
+                    c.PyLong_FromLong(@intCast(value))
+                else
+                    c.PyLong_FromUnsignedLong(@intCast(value))),
+                else => @compileError("Int bit width too large to convert to python int"),
+            } else switch (info.bits) {
+                0...n1 => return @ptrCast(if (info.signedness == .signed)
+                    c.PyLong_FromLong(@intCast(value))
+                else
+                    c.PyLong_FromUnsignedLong(@intCast(value))),
+                n1 + 1...n2 => return @ptrCast(if (info.signedness == .signed)
+                    c.PyLong_FromLongLong(@intCast(value))
+                else
+                    c.PyLong_FromUnsignedLongLong(@intCast(value))),
                 else => @compileError("Int bit width too large to convert to python int"),
             },
             .Float => return @ptrCast(c.PyLong_FromDouble(@floatCast(value))),
@@ -826,10 +832,7 @@ pub const Int = extern struct {
         }
         @compileError("Int.fromInt value must be an integer or float type");
     }
-
-
 };
-
 
 pub const Float = extern struct {
     pub const BaseType = c.PyFloatObject;
@@ -840,8 +843,58 @@ pub const Float = extern struct {
     // Import the object protocol
     pub usingnamespace ObjectProtocol(@This());
 
-};
+    // Return true if its argument is a PyFloatObject or a subtype of PyFloatObject. This function always succeeds.
+    pub fn check(obj: *Object) bool {
+        return c.PyFloat_Check(@as([*c]c.PyObject, @ptrCast(obj))) != 0;
+    }
 
+    // Return true if its argument is a PyFloatObject, but not a subtype of PyFloatObject. This function always succeeds.
+    pub fn checkExact(obj: *Object) bool {
+        return c.PyFloat_CheckExact(@as([*c]c.PyObject, @ptrCast(obj))) != 0;
+    }
+
+    // Get the value of the Float object as the given type with error checking.
+    pub fn as(self: *Float, comptime T: type) !T {
+        if (@typeInfo(T) != .Float) {
+            @compileError("py.Float.as() type must a float");
+        }
+        const r = c.PyFloat_AsDouble(@ptrCast(self));
+        if (r == -1 and errorOccurred() != null) {
+            return error.PyError;
+        }
+        return @floatCast(r);
+    }
+
+    // Create a new PyFloatObject object from a floating point type.
+    // Returns new reference.
+    pub fn new(value: anytype) !*Float {
+        if (newUnchecked(value)) |r| {
+            return @ptrCast(r);
+        }
+        return error.PyError;
+    }
+
+    // Same as new but without error checking
+    pub fn newUnchecked(value: anytype) ?*Float {
+        return @ptrCast(c.PyFloat_FromDouble(@floatCast(value)));
+    }
+
+    // Same as new just using the python's naming.
+    pub const fromDouble = new;
+    pub const fromDoubleUnchecked = newUnchecked;
+
+    // Create a PyFloatObject object based on the string value in str, or NULL on failure.
+    pub fn fromString(value: [:0]const u8) !*Float {
+        if (fromStringUnchecked(value)) |r| {
+            return @ptrCast(r);
+        }
+        return error.PyError;
+    }
+
+    pub fn fromStringUnchecked(value: [:0]const u8) ?*Float {
+        return @ptrCast(c.PyFloat_FromString(@ptrCast(value)));
+    }
+};
 
 // TODO: Fix zig bug preventing this from importing...
 const PyASCIIObject = extern struct {
@@ -861,7 +914,6 @@ const PyUnicodeObject = extern struct {
     data: ?*anyopaque,
 };
 
-
 pub const Str = extern struct {
     pub const BaseType = PyUnicodeObject;
 
@@ -870,7 +922,6 @@ pub const Str = extern struct {
 
     // Import the object protocol
     pub usingnamespace ObjectProtocol(@This());
-
 
     // Return true if the object obj is a Unicode object or an instance of a Unicode subtype.
     // This function always succeeds.
@@ -881,7 +932,7 @@ pub const Str = extern struct {
     // Return true if the object obj is a Unicode object, but not an instance of a subtype.
     // This function always succeeds.
     pub fn checkExact(obj: *Object) bool {
-        return c.PyUnicode_CheckExact(@ptrCast(obj)) != 0;
+        return c.PyUnicode_CheckExact(@as([*c]c.PyObject, @ptrCast(obj))) != 0;
     }
 
     // Return the length of the Unicode string, in code points. unicode has to be a
@@ -901,7 +952,7 @@ pub const Str = extern struct {
     // The return value might be a shared object, i.e. modification of the
     // data is not allowed.
     pub fn fromSlice(str: []const u8) !*Str {
-        if (c.PyUnicode_FromStringAndSize(str.ptr, str.len)) |o| {
+        if (c.PyUnicode_FromStringAndSize(str.ptr, @intCast(str.len))) |o| {
             return @ptrCast(o);
         }
         return error.PyError;
@@ -926,9 +977,8 @@ pub const Str = extern struct {
         return error.PyError;
     }
 
-
     pub fn internInPlace(str: **Str) void {
-        c.PyUnicode_InternInPlace(str);
+        c.PyUnicode_InternInPlace(@ptrCast(str));
     }
 
     // Return data as utf8
@@ -936,6 +986,8 @@ pub const Str = extern struct {
         return c.PyUnicode_AsUTF8(@ptrCast(self));
     }
 
+    // Alias to asString
+    pub const data = asString;
 };
 
 pub const Tuple = extern struct {
@@ -948,10 +1000,7 @@ pub const Tuple = extern struct {
     pub usingnamespace ObjectProtocol(@This());
 
     pub fn parse(self: *Tuple, format: [:0]const u8, args: anytype) !void {
-        const r = @call(.auto, c.PyArg_ParseTuple, .{
-            @as([*c]c.PyObject, @ptrCast(self)),
-            format
-        } ++ args);
+        const r = @call(.auto, c.PyArg_ParseTuple, .{ @as([*c]c.PyObject, @ptrCast(self)), format } ++ args);
         if (r == 0) return error.PyError;
     }
 
@@ -979,7 +1028,7 @@ pub const Tuple = extern struct {
     // This steals a reference to every value.
     pub fn newFromArgs(args: anytype) !*Tuple {
         if (c.PyTuple_New(args.len)) |r| {
-            inline for(args, 0..) |arg, i| {
+            inline for (args, 0..) |arg, i| {
                 // FIXME: Zig thinks this writes out of bounds
                 //c.PyTuple_SET_ITEM(@ptrCast(r), @intCast(i), @ptrCast(arg));
                 _ = c.PyTuple_SetItem(@ptrCast(r), @intCast(i), @ptrCast(arg));
@@ -1047,7 +1096,6 @@ pub const Tuple = extern struct {
     // Same as slice but no error checking
     pub fn sliceUnchecked(self: *Tuple, low: usize, high: usize) ?*Tuple {
         return @ptrCast(c.PyTuple_GetSlice(@ptrCast(self), @intCast(low), @intCast(high)));
-
     }
 
     // Create a copy of the tuple. Same as slice(0, size())
@@ -1056,7 +1104,6 @@ pub const Tuple = extern struct {
         const end = try self.size();
         return try self.slice(0, end);
     }
-
 };
 
 pub const List = extern struct {
@@ -1198,7 +1245,7 @@ pub const List = extern struct {
     // This is the same as PyList_SetSlice(list, PY_SSIZE_T_MAX, PY_SSIZE_T_MAX, iterable)
     // and analogous to list.extend(iterable) or list += iterable.
     pub fn extend(self: *List, iterable: *Object) !void {
-        if (self.extendUnchecked(iterable) < 0 ) {
+        if (self.extendUnchecked(iterable) < 0) {
             return error.PyError;
         }
     }
@@ -1214,7 +1261,7 @@ pub const List = extern struct {
     // Remove all items from list. This is the same as PyList_SetSlice(list, 0, PY_SSIZE_T_MAX, NULL)
     // and analogous to list.clear() or del list[:].
     pub fn clear(self: *List) !void {
-        if (self.clearUnchecked() < 0 ) {
+        if (self.clearUnchecked() < 0) {
             return error.PyError;
         }
     }
@@ -1268,7 +1315,7 @@ pub const List = extern struct {
 pub const Dict = extern struct {
     pub const BaseType = c.PyDictObject;
     // Iteration item
-    pub const Item = struct{key: *Object, value: *Object};
+    pub const Item = struct { key: *Object, value: *Object };
 
     // The underlying python structure
     impl: BaseType,
@@ -1328,14 +1375,14 @@ pub const Dict = extern struct {
     // if it isn’t, TypeError will be raised.
     // This function does not steal a reference to val.
     pub fn set(self: *Dict, key: *Object, value: *Object) !void {
-        if (c.PyDict_SetItem(@ptrCast(self), @ptrCast(key), @ptrCast(value)) < 0 ) {
+        if (c.PyDict_SetItem(@ptrCast(self), @ptrCast(key), @ptrCast(value)) < 0) {
             return error.PyError;
         }
     }
 
     // Same as set but uses a string as the key
     pub fn setString(self: *Dict, key: [:0]const u8, value: *Object) !void {
-        if (c.PyDict_SetItemString(@ptrCast(self), key, @ptrCast(value)) < 0 ) {
+        if (c.PyDict_SetItemString(@ptrCast(self), key, @ptrCast(value)) < 0) {
             return error.PyError;
         }
     }
@@ -1480,7 +1527,6 @@ pub const Set = extern struct {
 
     // Import the object protocol
     pub usingnamespace ObjectProtocol(@This());
-
 };
 
 pub const Module = extern struct {
@@ -1506,23 +1552,22 @@ pub const Module = extern struct {
     // Add an object to module as name. This is a convenience function which can be used
     // from the module’s initialization function.
     // This does not steal a reference to value.
-    pub fn addObjectRef(self: *Module, name: [:0]const u8, value: [*c]Object) !void {
+    pub fn addObjectRef(self: *Module, name: [:0]const u8, value: *Object) !void {
         const r = c.PyModule_AddObjectRef(@ptrCast(self), name, @ptrCast(value));
-        if (r < 0 ) return error.PyError;
+        if (r < 0) return error.PyError;
     }
 
     // Like addObjectRef but steals a reference to value
     pub fn addObject(self: *Module, name: [:0]const u8, value: *Object) !void {
         const f = if (comptime versionCheck(.gte, VER_313)) c.PyModule_Add else c.PyModule_AddObject;
         const r = f(@ptrCast(self), name, @ptrCast(value));
-        if (r < 0 ) return error.PyError;
+        if (r < 0) return error.PyError;
     }
 
     pub fn create(def: *ModuleDef) [*c]Object {
         const mod = @as([*c]c.PyModuleDef, @ptrCast(def));
         return @ptrCast(c.PyModule_Create(mod));
     }
-
 };
 
 // Returns a new reference.
@@ -1535,7 +1580,6 @@ pub fn importModule(name: [:0]const u8) !*Module {
     return error.PyError;
 }
 
-
 pub const MethodDef = c.PyMethodDef;
 pub const GetSetDef = c.PyGetSetDef;
 pub const SlotDef = c.PyModuleDef_Slot;
@@ -1545,14 +1589,13 @@ pub const ModuleDef = extern struct {
     const Self = @This();
     impl: BaseType,
     pub fn new(v: BaseType) Self {
-        return Self{.impl=v};
+        return Self{ .impl = v };
     }
 
     pub fn init(self: *Self) ?*Object {
         return @ptrCast(c.PyModuleDef_Init(@ptrCast(self)));
     }
 };
-
 
 // Zig allocator using python functions
 const Allocator = struct {
@@ -1590,16 +1633,15 @@ const Allocator = struct {
     // Create an allocator that can be used with zig types but uses PyMem calls
     pub fn allocator(self: *Self) std.mem.Allocator {
         return std.mem.Allocator{
-            .ptr=@ptrCast(self),
-            .vtable=&.{
-                .alloc=alloc,
-                .resize=resize,
-                .remap=remap,
-                .free=free,
+            .ptr = @ptrCast(self),
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
             },
         };
     }
-
 };
 // TODO: per interpreter?
 var global_allocator = Allocator{};
@@ -1609,5 +1651,4 @@ pub const allocator = global_allocator.allocator();
 test "interpreter init" {
     initialize();
     defer finalize();
-
 }

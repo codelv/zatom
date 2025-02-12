@@ -43,6 +43,7 @@ pub const AtomMeta = extern struct {
             return error.PyError;
         }
         var pos: isize = 0;
+        var count: usize = 0;
         while (members.next(&pos)) |item| {
             if (!Str.check(item.key)) {
                 _ = py.typeError("atom members keys must strings");
@@ -52,17 +53,23 @@ pub const AtomMeta = extern struct {
                 _ = py.typeError("atom members values must Member");
                 return error.PyError;
             }
+            count += 1;
         }
-        if (pos < 0 or pos > 0xffff) {
+        if (count > 0xffff) {
             _ = py.typeError("atom member limit reached");
             return error.PyError;
         }
-        return @intCast(pos);
+        return @intCast(count);
     }
 
     // Create an AtomBase subclass
-    pub fn init(self: *Self, args: *Tuple, kwargs: ?*Dict) ?*Object {
-        _ = self;
+    pub fn new(_: *AtomMeta, args: *Tuple, kwargs: ?*Dict) ?*Object {
+        // Any uses of custom tp_new in this function will cause python to error out
+        // so temporarily swap it back to the default
+        AtomMeta.disableNew();
+        defer AtomMeta.enableNew();
+
+        // const stdout = std.io.getStdOut().writer();
 
         // name, bases, dct
         const kwlist = [_:null][*c]const u8{
@@ -75,7 +82,7 @@ pub const AtomMeta = extern struct {
         var bases: *Tuple = undefined;
         var dict: *Dict = undefined;
         var enable_weakrefs: bool = undefined;
-        py.parseTupleAndKeywords(args, kwargs, "UOO|p", @ptrCast(&kwlist), .{&name, &bases, &dict, &enable_weakrefs}) catch return null;
+        py.parseTupleAndKeywords(args, kwargs, "UOO|p", @ptrCast(&kwlist), .{ &name, &bases, &dict, &enable_weakrefs }) catch return null;
         if (!bases.typeCheckExactSelf()) {
             return py.typeError("AtomMeta's 2nd arg must be a tuple");
         }
@@ -88,9 +95,9 @@ pub const AtomMeta = extern struct {
             // Add __slots__ if not defined
             var slots =
                 if (enable_weakrefs)
-                    Tuple.newFromArgs(.{weakref_str.?.newref()}) catch return null
-                else
-                    Tuple.new(0) catch return null;
+                Tuple.newFromArgs(.{weakref_str.?.newref()}) catch return null
+            else
+                Tuple.new(0) catch return null;
             defer slots.decref();
             dict.set(@ptrCast(slots_str.?), @ptrCast(slots)) catch return null;
         }
@@ -106,28 +113,17 @@ pub const AtomMeta = extern struct {
             if (Member.check(entry.value) and Str.check(entry.key)) {
                 const member: *Member = @ptrCast(entry.value);
                 // TODO: Clone if a this is a base class member
-                member.index = @intCast(pos);
+                member.index = @intCast(slot_count);
                 slot_count += 1;
                 members.set(entry.key, entry.value) catch return null;
             }
         }
 
-
-        {
-            const stdout = std.io.getStdOut().writer();
-            const s = members.str() catch return null;
-            defer s.decref();
-            const s2 = bases.str() catch return null;
-            defer s2.decref();
-            stdout.print("AtomMeta.init members: {s} bases: {s}!\n", .{
-                s.asString(), s2.asString()
-            }) catch return null;
-        }
-
         // Modify the bases to
         const num_bases = bases.size() catch return null;
         if (num_bases == 0) {
-            return py.typeError("AtomMeta must contain AtomBase");
+            _ = py.typeError("AtomMeta must contain AtomBase");
+            return null;
         }
 
         const base = bases.get(0) catch return null; // Borrowed
@@ -139,7 +135,7 @@ pub const AtomMeta = extern struct {
         var owns_bases: bool = false;
         defer if (owns_bases) bases.decref();
 
-        if (slot_count > 0 and slot_count < atom.atom_types.len) {
+        if (slot_count > 1 and slot_count < atom.atom_types.len) {
             const slot_base = atom.atom_types[slot_count].?;
             if (num_bases == 1) {
                 // Add the approprate base
@@ -150,13 +146,12 @@ pub const AtomMeta = extern struct {
                 owns_bases = true;
                 bases.set(0, @ptrCast(slot_base.newref())) catch return null;
             }
-
-        } else {
+        } else if (slot_count >= atom.atom_types.len) {
             return py.typeError("TODO: Dynamic slots");
-        }
+        } // else no change needed
 
         // Create a new subclass
-        const result = Type.new(@ptrCast(TypeObject), name, bases, dict) catch return null;
+        const result = Type.new(TypeObject.?, name, bases, dict) catch return null;
         var ok: bool = false;
         defer if (!ok) result.decref();
         const cls: *AtomMeta = @ptrCast(result);
@@ -213,50 +208,30 @@ pub const AtomMeta = extern struct {
     }
 
     const getset = [_]py.GetSetDef{
-        .{
-            .name="__atom_members__",
-            .get=@ptrCast(&get_atom_members),
-            .set=@ptrCast(&set_atom_members),
-            .doc="Get and set the atom members"
-        },
-        .{} // sentinel
+        .{ .name = "__atom_members__", .get = @ptrCast(&get_atom_members), .set = @ptrCast(&set_atom_members), .doc = "Get and set the atom members" },
+        .{}, // sentinel
     };
 
     const methods = [_]py.MethodDef{
-//         .{
-//             .ml_name="get_member",
-//             .ml_meth=@constCast(@ptrCast(&get_member)),
-//             .ml_flags=py.c.METH_O,
-//             .ml_doc="Get the atom member with the given name"
-//         },
-//         .{
-//             .ml_name="members",
-//             .ml_meth=@constCast(@ptrCast(&get_atom_members)),
-//             .ml_flags=py.c.METH_NOARGS,
-//             .ml_doc="Get atom members"
-//         },
-//         .{
-//             .ml_name="__new__",
-//             .ml_meth=@constCast(@ptrCast(&new)),
-//             .ml_flags=py.c.METH_CLASS | py.c.METH_VARARGS|py.c.METH_KEYWORDS,
-//             .ml_doc="Create a new subclass"
-//         },
-        .{} // sentinel
+        .{ .ml_name = "get_member", .ml_meth = @constCast(@ptrCast(&get_member)), .ml_flags = py.c.METH_O, .ml_doc = "Get the atom member with the given name" },
+        .{ .ml_name = "members", .ml_meth = @constCast(@ptrCast(&get_atom_members)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Get atom members" },
+        .{}, // sentinel
     };
 
     var type_slots = [_]py.TypeSlot{
-        .{.slot=py.c.Py_tp_init, .pfunc=@constCast(@ptrCast(&init))},
-        .{.slot=py.c.Py_tp_dealloc, .pfunc=@constCast(@ptrCast(&dealloc))},
-        .{.slot=py.c.Py_tp_traverse, .pfunc=@constCast(@ptrCast(&traverse))},
-        .{.slot=py.c.Py_tp_clear, .pfunc=@constCast(@ptrCast(&clear))},
-        .{.slot=py.c.Py_tp_methods, .pfunc=@constCast(@ptrCast(&methods))},
-        .{} // sentinel
+        .{ .slot = py.c.Py_tp_new, .pfunc = @constCast(@ptrCast(&new)) },
+        .{ .slot = py.c.Py_tp_dealloc, .pfunc = @constCast(@ptrCast(&dealloc)) },
+        .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
+        .{ .slot = py.c.Py_tp_clear, .pfunc = @constCast(@ptrCast(&clear)) },
+        .{ .slot = py.c.Py_tp_methods, .pfunc = @constCast(@ptrCast(&methods)) },
+        .{ .slot = py.c.Py_tp_getset, .pfunc = @constCast(@ptrCast(&getset)) },
+        .{}, // sentinel
     };
     pub var TypeSpec = py.TypeSpec{
-        .name=package_name ++ ".AtomMeta",
-        .basicsize=@sizeOf(AtomMeta),
-        .flags=(py.c.Py_TPFLAGS_DEFAULT | py.c.Py_TPFLAGS_BASETYPE | py.c.Py_TPFLAGS_HAVE_GC),
-        .slots=@constCast(@ptrCast(&type_slots)),
+        .name = package_name ++ ".AtomMeta",
+        .basicsize = @sizeOf(AtomMeta),
+        .flags = (py.c.Py_TPFLAGS_DEFAULT | py.c.Py_TPFLAGS_BASETYPE | py.c.Py_TPFLAGS_HAVE_GC),
+        .slots = @constCast(@ptrCast(&type_slots)),
     };
 
     pub fn initType() !void {
@@ -267,8 +242,19 @@ pub const AtomMeta = extern struct {
     pub fn deinitType() void {
         py.clear(@ptrCast(&TypeObject));
     }
-};
 
+    // Python 3.12+ does not allow c-metaclasses with a custom tp_new so it does a check and will fail
+    // if it is redefined. The workaround is to temporarily swap tp_new back to the default,
+    // create the using PyType_FromMetaclas() then swap it back to the custom new so the custom new is
+    // still called. Any uses of Type.new in the metaclass also need to do this to use the "super().__new__"
+    pub fn enableNew() void {
+        TypeObject.?.impl.tp_new = @ptrCast(&new); // Re-enable custom new
+    }
+
+    pub fn disableNew() void {
+        TypeObject.?.impl.tp_new = py.c.PyType_Type.tp_new; // Disable custom new
+    }
+};
 
 pub fn initModule(mod: *py.Module) !void {
     atom_members_str = try py.Str.internFromString("__atom_members__");
@@ -290,4 +276,3 @@ pub fn deinitModule(mod: *py.Module) void {
     AtomMeta.deinitType();
     _ = mod; // TODO: Remove dead type
 }
-
