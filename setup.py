@@ -7,7 +7,7 @@ ext_modules = [
         sources=[
             'src/api.zig'
         ],
-        extra_compile_args=["-DOptimize=Debug"]
+        extra_compile_args=["-DOptimize=ReleaseFast"]
     )
 ]
 

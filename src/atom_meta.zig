@@ -4,12 +4,13 @@ const Type = py.Type;
 const Metaclass = py.Metaclass;
 const Object = py.Object;
 const Str = py.Str;
+const Int = py.Int;
 const Dict = py.Dict;
 const Tuple = py.Tuple;
 
 const atom = @import("atom.zig");
 const AtomBase = atom.AtomBase;
-const Member = @import("member.zig").Member;
+const MemberBase = @import("member.zig").MemberBase;
 
 // This is set at startup
 var atom_members_str: ?*Str = null;
@@ -31,7 +32,7 @@ pub const AtomMeta = extern struct {
     // Import the object protocol
     pub usingnamespace py.ObjectProtocol(@This());
 
-    pub fn check(obj: *Object) bool {
+    pub inline fn check(obj: *Object) bool {
         return obj.typeCheck(TypeObject.?);
     }
 
@@ -49,7 +50,7 @@ pub const AtomMeta = extern struct {
                 _ = py.typeError("atom members keys must strings");
                 return error.PyError;
             }
-            if (!Member.check(item.value)) {
+            if (!MemberBase.check(item.value)) {
                 _ = py.typeError("atom members values must Member");
                 return error.PyError;
             }
@@ -68,8 +69,6 @@ pub const AtomMeta = extern struct {
         // so temporarily swap it back to the default
         AtomMeta.disableNew();
         defer AtomMeta.enableNew();
-
-        // const stdout = std.io.getStdOut().writer();
 
         // name, bases, dct
         const kwlist = [_:null][*c]const u8{
@@ -109,13 +108,45 @@ pub const AtomMeta = extern struct {
         defer members.decref();
         var pos: isize = 0;
         var slot_count: usize = 0;
+        var last_bool_slot: ?usize = null;
+        const max_bits = @sizeOf(isize);
+        var bit_count: u5 = 0;
         while (dict.next(&pos)) |entry| {
-            if (Member.check(entry.value) and Str.check(entry.key)) {
-                const member: *Member = @ptrCast(entry.value);
+            if (MemberBase.check(entry.value) and Str.check(entry.key)) {
                 // TODO: Clone if a this is a base class member
-                member.index = @intCast(slot_count);
-                slot_count += 1;
-                members.set(entry.key, entry.value) catch return null;
+                const member: *MemberBase = @ptrCast(entry.value);
+                switch (member.info.storage_mode) {
+                    .slot => {
+                        member.info.index = @intCast(slot_count);
+                        slot_count += 1;
+                    },
+                    .bit => {
+                        if (last_bool_slot) |slot| {
+                            // Reuse the last open bit of the last bool's slot
+                            member.info.index = @intCast(slot);
+                            member.info.bit = bit_count;
+
+                            if (bit_count == max_bits - 1) {
+                                // If we reached the last bit in the last slot
+                                // clear the last slot, the next member needs to
+                                // allocate another slot
+                                last_bool_slot = null; // Clear
+                                bit_count = 0; // Reset
+                            } else {
+                                bit_count += 1;
+                            }
+                        } else {
+                            // Start a new packed bool slot
+                            member.info.index = @intCast(slot_count);
+                            last_bool_slot = slot_count;
+                            member.info.bit = 0;
+                            bit_count = 1; // Reset bit count
+                            slot_count += 1; // This consumes a slot
+                        }
+                    },
+                    .none => {}, // No-op
+                }
+                members.set(entry.key, @ptrCast(member)) catch return null;
             }
         }
 
@@ -151,10 +182,9 @@ pub const AtomMeta = extern struct {
         } // else no change needed
 
         // Create a new subclass
-        const result = Type.new(TypeObject.?, name, bases, dict) catch return null;
+        const cls: *AtomMeta = @ptrCast(Type.new(TypeObject.?, name, bases, dict) catch return null);
         var ok: bool = false;
-        defer if (!ok) result.decref();
-        const cls: *AtomMeta = @ptrCast(result);
+        defer if (!ok) cls.decref();
         if (cls.set_atom_members(members, null) < 0) {
             return null;
         }
@@ -188,6 +218,10 @@ pub const AtomMeta = extern struct {
         return py.systemError("Members are not initialized");
     }
 
+    pub fn get_slot_count(self: *Self) ?*Int {
+        return Int.new(self.slot_count) catch return null;
+    }
+
     // --------------------------------------------------------------------------
     // Type definition
     // --------------------------------------------------------------------------
@@ -198,7 +232,7 @@ pub const AtomMeta = extern struct {
     }
 
     pub fn clear(self: *Self) c_int {
-        py.clear(@ptrCast(&self.atom_members));
+        py.clear(&self.atom_members);
         return 0;
     }
 
@@ -209,6 +243,7 @@ pub const AtomMeta = extern struct {
 
     const getset = [_]py.GetSetDef{
         .{ .name = "__atom_members__", .get = @ptrCast(&get_atom_members), .set = @ptrCast(&set_atom_members), .doc = "Get and set the atom members" },
+        .{ .name = "__slot_count__", .get = @ptrCast(&get_slot_count), .set = null, .doc = "Get the slot count" },
         .{}, // sentinel
     };
 
@@ -240,7 +275,7 @@ pub const AtomMeta = extern struct {
     }
 
     pub fn deinitType() void {
-        py.clear(@ptrCast(&TypeObject));
+        py.clear(&TypeObject);
     }
 
     // Python 3.12+ does not allow c-metaclasses with a custom tp_new so it does a check and will fail
@@ -258,11 +293,11 @@ pub const AtomMeta = extern struct {
 
 pub fn initModule(mod: *py.Module) !void {
     atom_members_str = try py.Str.internFromString("__atom_members__");
-    errdefer py.clear(@ptrCast(&atom_members_str));
+    errdefer py.clear(&atom_members_str);
     slots_str = try Str.internFromString("__slots__");
-    errdefer py.clear(@ptrCast(&slots_str));
+    errdefer py.clear(&slots_str);
     weakref_str = try Str.internFromString("__weakref__");
-    errdefer py.clear(@ptrCast(&weakref_str));
+    errdefer py.clear(&weakref_str);
 
     try AtomMeta.initType();
     errdefer AtomMeta.deinitType();
@@ -270,9 +305,9 @@ pub fn initModule(mod: *py.Module) !void {
 }
 
 pub fn deinitModule(mod: *py.Module) void {
-    py.clear(@ptrCast(&atom_members_str));
-    py.clear(@ptrCast(&weakref_str));
-    py.clear(@ptrCast(&slots_str));
+    py.clear(&atom_members_str);
+    py.clear(&weakref_str);
+    py.clear(&slots_str);
     AtomMeta.deinitType();
     _ = mod; // TODO: Remove dead type
 }

@@ -37,8 +37,8 @@ pub const AtomBase = extern struct {
         if (!AtomMeta.check(@ptrCast(cls))) {
             return @ptrCast(py.typeError("atom meta"));
         }
-        const meta: *AtomMeta = @ptrCast(cls);
         const self: *Self = @ptrCast(cls.genericNew(args, kwargs) catch return null);
+        const meta: *AtomMeta = @ptrCast(cls);
         self.info.slot_count = meta.slot_count;
         return self;
     }
@@ -63,7 +63,7 @@ pub const AtomBase = extern struct {
     // Get a pointer to slot at the given index
     // This intentionally disables safety checking to write into the
     // inlined slots
-    pub fn slotPtr(self: *Self, i: u16) ?*?*Object {
+    pub fn slotPtr(self: *Self, i: u32) ?*?*Object {
         if (i < self.info.slot_count) {
             @setRuntimeSafety(false);
             return &self.slots[i];
@@ -109,17 +109,10 @@ pub const AtomBase = extern struct {
     }
 
     const methods = [_]py.MethodDef{
-        //         .{
-        //             .ml_name="init_subclass",
-        //             .ml_meth=@constCast(@ptrCast(&init_subclass)),
-        //             .ml_flags=py.c.METH_CLASS | py.c.METH_NOARGS,
-        //             .ml_doc="Initialize the atom_members for the subclass"
-        //
-        //         },
         .{}, // sentinel
     };
     const type_slots = [_]py.TypeSlot{
-        //.{.slot=py.c.Py_tp_new, .pfunc=@constCast(@ptrCast(&new))},
+        .{ .slot=py.c.Py_tp_new, .pfunc=@constCast(@ptrCast(&new)) },
         .{ .slot = py.c.Py_tp_init, .pfunc = @constCast(@ptrCast(&init)) },
         .{ .slot = py.c.Py_tp_dealloc, .pfunc = @constCast(@ptrCast(&dealloc)) },
         .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
@@ -147,7 +140,7 @@ pub const AtomBase = extern struct {
     }
 
     pub fn deinitType() void {
-        py.clear(@ptrCast(&TypeObject));
+        py.clear(&TypeObject);
     }
 };
 
@@ -224,14 +217,14 @@ pub fn Atom(comptime slot_count: u16) type {
         }
 
         pub fn deinitType() void {
-            py.clear(@ptrCast(&TypeObject));
+            py.clear(&TypeObject);
         }
     };
 }
 
 pub fn initModule(mod: *py.Module) !void {
     frozen_str = try py.Str.internFromString("--frozen");
-    errdefer py.clear(@ptrCast(&frozen_str));
+    errdefer py.clear(&frozen_str);
     try AtomBase.initType();
     errdefer AtomBase.deinitType();
 
@@ -250,13 +243,13 @@ pub fn initModule(mod: *py.Module) !void {
 }
 
 pub fn deinitModule(mod: *py.Module) void {
-    py.clear(@ptrCast(&frozen_str));
+    py.clear(&frozen_str);
 
-    py.clear(@ptrCast(&atom_types[0]));
-    py.clear(@ptrCast(&atom_types[1]));
+    py.clear(&atom_types[0]);
+    py.clear(&atom_types[1]);
     inline for (2..atom_types.len) |i| {
         // Clear the type slot
-        py.clear(@ptrCast(&atom_types[i]));
+        py.clear(&atom_types[i]);
         Atom(i).deinitType();
     }
     AtomBase.deinitType();
