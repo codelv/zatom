@@ -14,17 +14,13 @@ const AtomBase = @import("atom.zig").AtomBase;
 const package_name = @import("api.zig").package_name;
 const scalars = @import("members/scalars.zig");
 
-
 pub const StorageMode = enum(u2) {
     slot, // Takes a full slot
     bit, // Takes a single bit of a slot
     none, // Does not require any storage
 };
 
-pub const DefaultMode = enum(u1) {
-    static,
-    call
-};
+pub const DefaultMode = enum(u1) { static, call };
 
 pub const MemberInfo = packed struct {
     index: u16,
@@ -89,6 +85,7 @@ pub const MemberBase = extern struct {
                 return -1;
             }
             self.info.index = Int.as(@ptrCast(v), u16) catch return -1;
+            return 0;
         }
         _ = py.typeError("Member index cannot be deleted");
         return -1;
@@ -105,6 +102,7 @@ pub const MemberBase = extern struct {
                 return -1;
             }
             self.info.bit = Int.as(@ptrCast(v), u5) catch return -1;
+            return 0;
         }
         _ = py.typeError("Member bit cannot be deleted");
         return -1;
@@ -205,16 +203,16 @@ pub const MemberBase = extern struct {
         }
         errdefer if (result.metadata) |metadata| metadata.decref();
 
-        if (self.default_context) | context | {
+        if (self.default_context) |context| {
             result.default_context = context.newref();
         }
         errdefer if (result.default_context) |context| context.decref();
 
-        if (self.validate_context) | context | {
+        if (self.validate_context) |context| {
             result.validate_context = context.newref();
         }
         errdefer if (result.validate_context) |context| context.decref();
-        if (self.coercer_context) | context | {
+        if (self.coercer_context) |context| {
             result.coercer_context = context.newref();
         }
         errdefer if (result.coercer_context) |context| context.decref();
@@ -225,7 +223,7 @@ pub const MemberBase = extern struct {
     pub fn dealloc(self: *Self) void {
         self.gcUntrack();
         _ = self.clear();
-        self.typeref().impl.tp_free.?(@ptrCast(self));
+        self.typeref().free(@ptrCast(self));
     }
 
     pub fn clear(self: *Self) c_int {
@@ -294,7 +292,6 @@ pub const MemberBase = extern struct {
     }
 };
 
-
 pub fn no_default() !?*Object {
     return null;
 }
@@ -322,7 +319,7 @@ pub const MemberSpec = struct {
     check_coercer_context: ?*const fn (self: *MemberBase, context: ?*Object) py.Error!void = null,
 
     // Must return a new reference
-    default_factory: *const fn() py.Error!?*Object = no_default,
+    default_factory: *const fn () py.Error!?*Object = no_default,
 };
 
 // Create a member subclass with the given mode
@@ -354,7 +351,7 @@ pub fn Member(comptime spec: MemberSpec) type {
                 };
                 var default_context: ?*Object = null;
                 var default_factory: ?*Object = null;
-                py.parseTupleAndKeywords(args, kwargs, "|OO", @ptrCast(&kwlist), .{&default_context, &default_factory}) catch return -1;
+                py.parseTupleAndKeywords(args, kwargs, "|OO", @ptrCast(&kwlist), .{ &default_context, &default_factory }) catch return -1;
 
                 if (default_context) |context| {
                     self.base.default_context = context.newref();
@@ -497,36 +494,35 @@ pub fn Member(comptime spec: MemberSpec) type {
             // else do nothing
         }
 
-
-//         // Base class provides the slot behavior with no validation
-//         pub fn __get__(self: *Self, obj: ?*AtomBase, _: ?*Object) ?*Object {
-//             if (obj) |atom| {
-//                 // @branchHint(.likely);
-//                 if (!atom.typeCheckSelf()) {
-//                     // @branchHint(.cold);
-//                     return py.typeError("Atom");
-//                 }
-//                 return @ptrCast(spec.getattr(@ptrCast(self), atom, obj) catch null);
-//             } else {
-//                 // @branchHint(.cold);
-//                 return @ptrCast(self.newref());
-//             }
-//         }
-//
-//         pub fn __set__(self: *Self, atom: *AtomBase, value: ?*Object) c_int {
-//             if (!atom.typeCheckSelf()) {
-//                 // @branchHint(.cold);
-//                 _ = py.typeError("Atom");
-//                 return -1;
-//             }
-//             if (value) |v| {
-//                 // @branchHint(.likely);
-//                 spec.setattr(self, atom, v) catch return -1;
-//             } else {
-//                 spec.delattr(self, atom) catch return -1;
-//             }
-//             return 0;
-//         }
+        //         // Base class provides the slot behavior with no validation
+        //         pub fn __get__(self: *Self, obj: ?*AtomBase, _: ?*Object) ?*Object {
+        //             if (obj) |atom| {
+        //                 // @branchHint(.likely);
+        //                 if (!atom.typeCheckSelf()) {
+        //                     // @branchHint(.cold);
+        //                     return py.typeError("Atom");
+        //                 }
+        //                 return @ptrCast(spec.getattr(@ptrCast(self), atom, obj) catch null);
+        //             } else {
+        //                 // @branchHint(.cold);
+        //                 return @ptrCast(self.newref());
+        //             }
+        //         }
+        //
+        //         pub fn __set__(self: *Self, atom: *AtomBase, value: ?*Object) c_int {
+        //             if (!atom.typeCheckSelf()) {
+        //                 // @branchHint(.cold);
+        //                 _ = py.typeError("Atom");
+        //                 return -1;
+        //             }
+        //             if (value) |v| {
+        //                 // @branchHint(.likely);
+        //                 spec.setattr(self, atom, v) catch return -1;
+        //             } else {
+        //                 spec.delattr(self, atom) catch return -1;
+        //             }
+        //             return 0;
+        //         }
 
         const type_slots = [_]py.TypeSlot{
             .{ .slot = py.c.Py_tp_init, .pfunc = @constCast(@ptrCast(&init)) },
@@ -552,7 +548,6 @@ pub fn Member(comptime spec: MemberSpec) type {
     };
 }
 
-
 pub fn initModule(mod: *py.Module) !void {
     default_name_str = try py.Str.internFromString("<undefined>");
     errdefer py.clear(&default_name_str);
@@ -562,7 +557,6 @@ pub fn initModule(mod: *py.Module) !void {
 
     try scalars.initModule(mod);
     errdefer scalars.deinitModule(mod);
-
 }
 
 pub fn deinitModule(mod: *py.Module) void {

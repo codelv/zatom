@@ -18,7 +18,23 @@ var frozen_str: ?*Str = null;
 // These are generated a compt
 pub var atom_types = [_]?*Type{null} ** MAX_INLINE_SLOT_COUNT;
 
-pub const AtomInfo = packed struct { slot_count: u16 = 0, notifications_disabled: bool = false, has_guards: bool = false, has_atomref: bool = false, has_observers: bool = false, is_frozen: bool = false, _reserved: u11 = 0 };
+// zig fmt: off
+pub const AtomInfo = packed struct {
+    pool_index: u32 = 0,
+    slot_count: u16 = 0,
+    notifications_disabled: bool = false,
+    has_guards: bool = false,
+    has_atomref: bool = false,
+    has_observers: bool = false,
+    is_frozen: bool = false,
+    _reserved: u11 = 0
+};
+comptime {
+    if (@bitSizeOf(AtomInfo) != 64) {
+        @compileError(std.fmt.comptimePrint("AtomInfo should be 64 bits: got {}",.{@bitSizeOf(AtomInfo)}));
+    }
+}
+// zig fmt: on
 
 // Base Atom class
 pub const AtomBase = extern struct {
@@ -27,7 +43,6 @@ pub const AtomBase = extern struct {
     pub var TypeObject: ?*Type = null;
     pub const BaseType = Object.BaseType;
     base: BaseType,
-    pool: ?*ObserverPool = null,
     info: AtomInfo,
     slots: [1]?*Object,
 
@@ -51,8 +66,6 @@ pub const AtomBase = extern struct {
         if (kwargs) |kw| {
             var pos: isize = 0;
             const obj: *Object = @ptrCast(self);
-            obj.incref();
-            defer obj.decref();
             while (kw.next(&pos)) |entry| {
                 obj.setAttr(@ptrCast(entry.key), entry.value) catch return -1;
             }
@@ -60,13 +73,23 @@ pub const AtomBase = extern struct {
         return 0;
     }
 
-    // Get a pointer to slot at the given index
-    // This intentionally disables safety checking to write into the
-    // inlined slots
+    // Get a pointer to slot address at the given index
     pub fn slotPtr(self: *Self, i: u32) ?*?*Object {
         if (i < self.info.slot_count) {
+            // This intentionally disables safety checking because it
+            // intentionally writes into the inlined slots in the Atom(n) subclass
+            // as long as the slot_count was properly set by the metaclass this is ok.
             @setRuntimeSafety(false);
             return &self.slots[i];
+        }
+        return null;
+    }
+
+    // Get a pointer to the ObserverPool from the manager on the type.
+    pub fn observerPool(self: *Self) ?*ObserverPool {
+        if (self.info.has_observers) {
+            const meta: *AtomMeta = @ptrCast(self.typeref());
+            return meta.pool_manager.?.get(self.info.pool_index);
         }
         return null;
     }
@@ -76,22 +99,41 @@ pub const AtomBase = extern struct {
         return obj.typeCheck(TypeObject.?);
     }
 
-    pub fn dealloc(self: *Self) void {
-        const selfptr: *Object = @ptrCast(self);
-        selfptr.gcUntrack();
-        _ = self.clear();
-        if (self.pool) |pool| {
-            pool.deinit();
-            self.pool = null;
+    pub fn get_member(cls: *Object, name: *Object) ?*Object {
+        if (!AtomMeta.check(@ptrCast(cls))) {
+            // @branchHint(.cold);
+            return py.typeError("Atom must be defined with AtomMeta as a metatype");
         }
-        selfptr.typeref().impl.tp_free.?(selfptr);
+        const meta: *AtomMeta = @ptrCast(cls);
+        return meta.get_member(name);
+    }
+
+    pub fn members(cls: *Object) ?*Object {
+        if (!AtomMeta.check(@ptrCast(cls))) {
+            // @branchHint(.cold);
+            return py.typeError("Atom must be defined with AtomMeta as a metatype");
+        }
+        const meta: *AtomMeta = @ptrCast(cls);
+        return meta.get_atom_members();
+    }
+
+    pub fn dealloc(self: *Self) void {
+        self.gcUntrack();
+        _ = self.clear();
+        if (self.observerPool() != null) {
+            const meta: *AtomMeta = @ptrCast(self.typeref());
+            meta.pool_manager.?.release(py.allocator, self.info.pool_index) catch {
+                _ = py.memoryError();
+                // TODO: This is bad
+            };
+        }
+        self.typeref().free(@ptrCast(self));
     }
 
     pub fn clear(self: *Self) c_int {
         py.clear(&self.slots[0]);
-        if (self.pool) |pool| {
+        if (self.observerPool()) |pool| {
             pool.clear() catch {
-                _ = py.memoryError();
                 return -1;
             };
         }
@@ -100,7 +142,7 @@ pub const AtomBase = extern struct {
 
     // Check if object is an atom_meta
     pub fn traverse(self: *Self, visit: py.visitproc, arg: ?*anyopaque) c_int {
-        if (self.pool) |pool| {
+        if (self.observerPool()) |pool| {
             const r = pool.traverse(visit, arg);
             if (r != 0)
                 return r;
@@ -109,10 +151,12 @@ pub const AtomBase = extern struct {
     }
 
     const methods = [_]py.MethodDef{
+        .{ .ml_name = "get_member", .ml_meth = @constCast(@ptrCast(&get_member)), .ml_flags = py.c.METH_CLASS | py.c.METH_O, .ml_doc = "Get the atom member with the given name" },
+        .{ .ml_name = "members", .ml_meth = @constCast(@ptrCast(&members)), .ml_flags = py.c.METH_CLASS | py.c.METH_NOARGS, .ml_doc = "Get atom members" },
         .{}, // sentinel
     };
     const type_slots = [_]py.TypeSlot{
-        .{ .slot=py.c.Py_tp_new, .pfunc=@constCast(@ptrCast(&new)) },
+        .{ .slot = py.c.Py_tp_new, .pfunc = @constCast(@ptrCast(&new)) },
         .{ .slot = py.c.Py_tp_init, .pfunc = @constCast(@ptrCast(&init)) },
         .{ .slot = py.c.Py_tp_dealloc, .pfunc = @constCast(@ptrCast(&dealloc)) },
         .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
@@ -146,8 +190,8 @@ pub const AtomBase = extern struct {
 
 comptime {
     const size = @sizeOf(AtomBase);
-    if (size != 40) {
-        @compileLog("Expected 40 bytes got {}", .{size});
+    if (size != 32) {
+        @compileLog("Expected 32 bytes got {}", .{size});
     }
 }
 // Generate a type that extends the AtomBase with inlined slots
@@ -155,7 +199,7 @@ pub fn Atom(comptime slot_count: u16) type {
     if (slot_count < 2) {
         @compileError("Cannot create an atom with < 2 slots. Use the AtomBase instead");
     }
-    return struct {
+    return extern struct {
         // Reference to the type. This is set in ready
         pub var TypeObject: ?*Type = null;
         pub const BaseType = AtomBase;
@@ -163,6 +207,15 @@ pub fn Atom(comptime slot_count: u16) type {
 
         base: BaseType,
         slots: [slot_count]?*Object,
+
+        comptime {
+            // Check that alignment of base and this class's slots are correct
+            // Otherwise it will start smashing stuff..
+            const slot_size = @sizeOf(?*Object);
+            if (@offsetOf(AtomBase, "slots")+slot_size != @offsetOf(Self, "slots")) {
+                @compileError(std.fmt.comptimePrint("Slots of AtomBase and {} are not contiguous in memory", .{Self}));
+            }
+        }
 
         // Import the object protocol
         pub usingnamespace py.ObjectProtocol(@This());
@@ -175,7 +228,7 @@ pub fn Atom(comptime slot_count: u16) type {
         pub fn dealloc(self: *Self) void {
             self.gcUntrack();
             _ = self.clear();
-            self.typeref().impl.tp_free.?(@ptrCast(self));
+            self.typeref().free(@ptrCast(self));
         }
 
         pub fn clear(self: *Self) c_int {
@@ -221,6 +274,8 @@ pub fn Atom(comptime slot_count: u16) type {
         }
     };
 }
+
+
 
 pub fn initModule(mod: *py.Module) !void {
     frozen_str = try py.Str.internFromString("--frozen");

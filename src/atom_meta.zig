@@ -11,6 +11,7 @@ const Tuple = py.Tuple;
 const atom = @import("atom.zig");
 const AtomBase = atom.AtomBase;
 const MemberBase = @import("member.zig").MemberBase;
+const PoolManager = @import("observer_pool.zig").PoolManager;
 
 // This is set at startup
 var atom_members_str: ?*Str = null;
@@ -27,6 +28,7 @@ pub const AtomMeta = extern struct {
 
     base: BaseType,
     atom_members: ?*Dict = null,
+    pool_manager: ?*PoolManager = null,
     slot_count: u16 = 0,
 
     // Import the object protocol
@@ -188,6 +190,8 @@ pub const AtomMeta = extern struct {
         if (cls.set_atom_members(members, null) < 0) {
             return null;
         }
+        cls.pool_manager = PoolManager.new(py.allocator) catch return null;
+        defer if (!ok) cls.pool_manager.?.deinit(py.allocator);
         ok = true;
         return @ptrCast(cls);
     }
@@ -210,7 +214,7 @@ pub const AtomMeta = extern struct {
 
     pub fn get_member(self: *Self, name: *Object) ?*Object {
         if (!Str.check(name)) {
-            return py.typeError("name must be a string");
+            return py.typeError("member name must be a string");
         }
         if (self.atom_members) |members| {
             return members.getItemUnchecked(name);
@@ -225,20 +229,26 @@ pub const AtomMeta = extern struct {
     // --------------------------------------------------------------------------
     // Type definition
     // --------------------------------------------------------------------------
-    pub fn dealloc(self: *Self) void {
-        self.gcUntrack();
-        _ = self.clear();
-        self.typeref().impl.tp_free.?(@ptrCast(self));
-    }
-
     pub fn clear(self: *Self) c_int {
         py.clear(&self.atom_members);
+        if (self.pool_manager) |mgr| {
+            mgr.deinit(py.allocator);
+            self.pool_manager = null;
+        }
         return 0;
     }
 
-    // Check if object is an atom_meta
     pub fn traverse(self: *Self, visit: py.visitproc, arg: ?*anyopaque) c_int {
-        return py.visitAll(.{self.atom_members}, visit, arg);
+        if (self.pool_manager) |mgr| {
+            return mgr.traverse(visit, arg);
+        }
+        return py.visit(self.atom_members, visit, arg);
+    }
+
+    pub fn dealloc(self: *Self) void {
+        self.gcUntrack();
+        _ = self.clear();
+        self.typeref().free(@ptrCast(self));
     }
 
     const getset = [_]py.GetSetDef{
@@ -253,12 +263,12 @@ pub const AtomMeta = extern struct {
         .{}, // sentinel
     };
 
-    var type_slots = [_]py.TypeSlot{
+    const type_slots = [_]py.TypeSlot{
         .{ .slot = py.c.Py_tp_new, .pfunc = @constCast(@ptrCast(&new)) },
         .{ .slot = py.c.Py_tp_dealloc, .pfunc = @constCast(@ptrCast(&dealloc)) },
         .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
         .{ .slot = py.c.Py_tp_clear, .pfunc = @constCast(@ptrCast(&clear)) },
-        .{ .slot = py.c.Py_tp_methods, .pfunc = @constCast(@ptrCast(&methods)) },
+        // .{ .slot = py.c.Py_tp_methods, .pfunc = @constCast(@ptrCast(&methods)) },
         .{ .slot = py.c.Py_tp_getset, .pfunc = @constCast(@ptrCast(&getset)) },
         .{}, // sentinel
     };

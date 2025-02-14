@@ -9,6 +9,7 @@ try:
 except ImportError:
     BENCHMARK_INSTALLED = False
 
+
 @pytest.mark.skipif(not BENCHMARK_INSTALLED, reason="benchmark is not installed")
 @pytest.mark.benchmark(group="init")
 def test_create_small_obj_zatom(benchmark):
@@ -27,5 +28,14 @@ def test_create_small_obj_atom(benchmark):
         x = catom.Int()
         y = catom.Int()
         z = catom.Int()
+
+    benchmark.pedantic(Point, rounds=100000, iterations=100)
+
+
+@pytest.mark.skipif(not BENCHMARK_INSTALLED, reason="benchmark is not installed")
+@pytest.mark.benchmark(group="init")
+def test_create_small_obj_slots(benchmark):
+    class Point:
+        __slots__ = ("x", "y", "z")
 
     benchmark.pedantic(Point, rounds=100000, iterations=100)

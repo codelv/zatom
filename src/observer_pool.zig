@@ -25,6 +25,7 @@ pub const PoolModification = union(enum) {
     remove_topic: struct { pool: *ObserverPool, topic: u16 },
     clear: *ObserverPool,
     deinit: *ObserverPool,
+    release: struct { mgr: *PoolManager, index: u32},
 };
 
 pub const PoolGuard = struct {
@@ -84,7 +85,7 @@ pub const PoolGuard = struct {
 };
 
 pub const ObserverPool = struct {
-
+    // TODO: Convert to unmanaged...
     // Mapping of observer hash to ObserverInfo
     pub const ObserverMap = std.AutoHashMap(isize, ObserverInfo);
 
@@ -96,15 +97,18 @@ pub const ObserverPool = struct {
     map: TopicMap,
     guard: ?*PoolGuard = null,
 
-    pub fn init(allocator: std.mem.Allocator) !*ObserverPool {
+    pub fn new(allocator: std.mem.Allocator) !*ObserverPool {
         const pool = try allocator.create(ObserverPool);
         pool.map = TopicMap.init(allocator);
         return pool;
     }
 
-    pub fn add_observer(self: *ObserverPool, topic: u16, observer: *Object, change_types: u8) !void {
+    pub fn add_observer(self: *ObserverPool, topic: u16, observer: *Object, change_types: u8) py.Error!void {
         if (self.guard) |guard| {
-            try guard.mods.append(PoolModification{ .add_observer = .{ .pool = self, .topic = topic, .observer = observer.newref(), .change_types = change_types } });
+            guard.mods.append(PoolModification{ .add_observer = .{ .pool = self, .topic = topic, .observer = observer.newref(), .change_types = change_types } }) catch {
+                _ = py.memoryError();
+                return error.PyError;
+            };
             return;
         }
         const hash = try observer.hash();
@@ -121,9 +125,12 @@ pub const ObserverPool = struct {
 
     // Remove an observer from the pool. If the pool is guarded
     // by a modification guard this may require allocation.
-    pub fn remove_observer(self: *ObserverPool, topic: u16, observer: *Object) !void {
+    pub fn remove_observer(self: *ObserverPool, topic: u16, observer: *Object) py.Error!void {
         if (self.guard) |guard| {
-            try guard.mods.append(PoolModification{ .remove_observer = .{ .pool = self, .topic = topic, .observer = observer.newref() } });
+            guard.mods.append(PoolModification{ .remove_observer = .{ .pool = self, .topic = topic, .observer = observer.newref() } }) catch {
+                _ = py.memoryError();
+                return error.PyError;
+            };
             return;
         }
         if (self.map.getPtr(topic)) |observer_map| {
@@ -140,9 +147,12 @@ pub const ObserverPool = struct {
 
     // Remove all observers for a given topic observer from the pool.
     // If the pool is guarded by a modification guard this may require allocation.
-    pub fn remove_topic(self: *ObserverPool, topic: u16) !void {
+    pub fn remove_topic(self: *ObserverPool, topic: u16) py.Error!void {
         if (self.guard) |guard| {
-            try guard.mods.append(PoolModification{ .remove_topic = .{ .pool = self, .topic = topic } });
+            guard.mods.append(PoolModification{ .remove_topic = .{ .pool = self, .topic = topic } }) catch {
+                _ = py.memoryError();
+                return error.PyError;
+            };
             return;
         }
         if (self.map.fetchRemove(topic)) |entry| {
@@ -156,9 +166,12 @@ pub const ObserverPool = struct {
 
     // Remove all observers from the pool. If the pool is guarded
     // by a modification guard this may require allocation.
-    pub fn clear(self: *ObserverPool) !void {
+    pub fn clear(self: *ObserverPool) py.Error!void {
         if (self.guard) |guard| {
-            try guard.mods.append(PoolModification{ .clear = self });
+            guard.mods.append(PoolModification{ .clear = self }) catch {
+                _ = py.memoryError();
+                return error.PyError;
+            };
             return;
         }
         var topics = self.map.valueIterator();
@@ -173,7 +186,7 @@ pub const ObserverPool = struct {
         self.map.clearRetainingCapacity();
     }
 
-    pub fn notify(self: *ObserverPool, topic: u16, args: *Tuple, kwargs: ?*Dict, change_types: u8) !bool {
+    pub fn notify(self: *ObserverPool, topic: u16, args: *Tuple, kwargs: ?*Dict, change_types: u8) py.Error!bool {
         var ok: bool = true;
         if (self.map.getPtr(topic)) |observer_map| {
             var guard = PoolGuard.init(self, self.map.allocator);
@@ -191,11 +204,14 @@ pub const ObserverPool = struct {
                         result.decref();
                     }
                 } else {
-                    try guard.mods.add(PoolModification{ .remove_observer = .{
+                    guard.mods.add(PoolModification{ .remove_observer = .{
                         .pool = self,
                         .topic = topic,
                         .observer = item.observer.newref(),
-                    } });
+                    } }) catch {
+                        _ = py.memoryError();
+                        return error.PyError;
+                    };
                 }
             }
         }
@@ -220,6 +236,109 @@ pub const ObserverPool = struct {
     pub fn deinit(self: *ObserverPool) void {
         std.debug.assert(self.guard == null);
         self.clear() catch unreachable; // There is no guard so it cannot fail
+        const allocator = self.map.allocator;
         self.map.deinit();
+        allocator.destroy(self);
+        self.* = undefined;
+    }
+};
+
+
+pub const PoolManager = struct {
+    const PoolList = std.ArrayListUnmanaged(?*ObserverPool);
+    const FreeList = std.ArrayListUnmanaged(u32);
+    pools: PoolList = .{},
+    free_slots: FreeList = .{},
+
+    // Create a new pool
+    pub fn new(allocator: std.mem.Allocator) py.Error!*PoolManager {
+        const self = allocator.create(PoolManager) catch {
+            _ = py.memoryError();
+            return error.PyError;
+        };
+        self.* = .{};
+        return self;
+    }
+
+    // Get the pool at the given index
+    // The caller must be sure they own it
+    pub inline fn get(self: PoolManager, index: u32) ?*ObserverPool {
+        return self.pools.items[index];
+    }
+
+    // Get the index of the next available a pool.
+    pub fn acquire(self: PoolManager, allocator: std.mem.Allocator) py.Error!u32 {
+        return self.acquireInternal(allocator) catch {
+            _ = py.memoryError();
+            return error.PyError;
+        };
+    }
+
+    // Release a pool back
+    pub fn release(self: *PoolManager, allocator: std.mem.Allocator, index: u32) py.Error!void {
+        return self.releaseInternal(allocator, index) catch {
+            _ = py.memoryError();
+            return error.PyError;
+        };
+    }
+
+    inline fn acquireInternal(self: PoolManager, allocator: std.mem.Allocator) !u32 {
+        if (self.free_slots.items.len == 0) {
+            if (self.pools.capacity >= std.math.maxInt(u32)) {
+                return error.PyError; // Limit reached
+            }
+            const pool = try ObserverPool.new(allocator);
+            errdefer allocator.free(pool);
+            try self.pools.append(allocator, pool);
+            return @intCast(self.pools.items.len - 1);
+        }
+        return self.free_slots.pop();
+    }
+
+    inline fn releaseInternal(self: *PoolManager, allocator: std.mem.Allocator, index: u32) !void {
+        if (self.get(index)) |pool| {
+            if (pool.guard) |guard| {
+                try guard.mods.append(PoolModification{ .release = .{
+                    .mgr = self,
+                    .index = index
+                } });
+                return; // Will be release when guard is done
+            }
+            try pool.clear();
+        }
+        try self.free_slots.append(allocator, index);
+    }
+
+    // Clear all the pools
+    pub fn clear(self: *PoolManager, allocator: std.mem.Allocator) void {
+        _ = allocator; // Needed if pool gets converted to unmanaged objects to sav
+        for (self.pools.items, 0..) |ptr, i| {
+            if (ptr) |pool| {
+                pool.deinit();
+            }
+            self.pools.items[i] = null;
+        }
+        self.pools.clearRetainingCapacity();
+        self.free_slots.clearRetainingCapacity();
+    }
+
+    // Let python visit everything in the pool
+    pub fn traverse(self: PoolManager, func: py.visitproc, arg: ?*anyopaque) c_int {
+        for (self.pools.items) |ptr| {
+            if (ptr) |pool| {
+                const r = pool.traverse(func, arg);
+                if (r != 0)
+                    return r;
+            }
+        }
+        return 0;
+    }
+
+    pub fn deinit(self: *PoolManager, allocator: std.mem.Allocator) void {
+        self.clear(allocator);
+        self.pools.clearAndFree(allocator);
+        self.free_slots.clearAndFree(allocator);
+        allocator.destroy(self);
+        self.* = undefined;
     }
 };
