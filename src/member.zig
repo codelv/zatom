@@ -1,4 +1,5 @@
 const py = @import("py.zig");
+const std = @import("std");
 const Type = py.Type;
 const Metaclass = py.Metaclass;
 const Object = py.Object;
@@ -17,6 +18,7 @@ const package_name = @import("api.zig").package_name;
 const scalars = @import("members/scalars.zig");
 const event = @import("members/event.zig");
 const instance = @import("members/instance.zig");
+const typed = @import("members/typed.zig");
 
 pub const StorageMode = enum(u2) {
     slot = 0, // Takes a full slot
@@ -24,18 +26,26 @@ pub const StorageMode = enum(u2) {
     none = 2, // Does not require any storage
 };
 
-pub const DefaultMode = enum(u1) { static = 0, call = 1 };
-
 pub const Ownership = enum(u1) { stolen = 0, borrowed = 1 };
+pub const DefaultMode = enum(u1) { static = 0, call = 1 };
 
 pub const MemberInfo = packed struct {
     index: u16,
     bit: u5, // bool bitfield
     storage_mode: StorageMode,
     default_mode: DefaultMode,
-    // frozen: bool,
-    reserved: u8, // Reduce this to so @sizeOf(MemberInfo) == 32 bits
+    // It is up to the member whether these is used or not
+    optional: bool,
+    reserved: u7, // Adjust this to so @sizeOf(MemberInfo) == 32 bits
 };
+
+
+comptime {
+    if (@bitSizeOf(MemberInfo) != 32) {
+        @compileError(std.fmt.comptimePrint("MemberInfo should be 32 bits: got {}",.{@bitSizeOf(MemberInfo)}));
+    }
+}
+
 
 
 // Base Member class
@@ -255,12 +265,11 @@ pub const MemberBase = extern struct {
     // Helper function for validation failures
     pub fn validateFail(self: *Self, atom: *AtomBase, value: *Object, expected: [:0]const u8) py.Error!void {
         _ = py.typeError(
-            "The '{s}' member on the '{s}' object must be of type '{s}'. Got object of type '{s}' instead"
-            ,.{
-               self.name.data(),
-               atom.typeName(),
-               expected,
-               value.typeName(),
+            "The '{s}' member on the '{s}' object must be of type '{s}'. Got object of type '{s}' instead",.{
+                self.name.data(),
+                atom.typeName(),
+                expected,
+                value.typeName(),
             }
         );
         return error.PyError;
@@ -730,6 +739,9 @@ pub fn initModule(mod: *py.Module) !void {
 
     try instance.initModule(mod);
     errdefer instance.deinitModule(mod);
+
+    try typed.initModule(mod);
+    errdefer typed.deinitModule(mod);
 
     try event.initModule(mod);
     errdefer event.deinitModule(mod);

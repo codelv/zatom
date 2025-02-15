@@ -1,5 +1,7 @@
 import pytest
-from zatom.api import AtomMeta, Atom, Member, Value, Str, Int, Bool, Bytes, Float
+from zatom.api import (
+    AtomMeta, Atom, Member, Value, Str, Int, Bool, Bytes, Float, Typed, Instance
+)
 
 
 def test_atom_no_members():
@@ -119,3 +121,66 @@ def test_bool():
 
     with pytest.raises(TypeError):
         a.a = "foo"
+
+
+def test_float():
+    class A(Atom):
+        x = Float()
+        y = Float()
+        z = Float(1.0)
+
+    a = A()
+    assert a.x == 0.0
+    a.x = 2.0
+    assert a.x == 2.0
+    assert a.y == 0.0
+    assert a.z == 1.0
+
+    with pytest.raises(TypeError):
+        a.z = None
+
+def test_instance():
+    class A(Atom):
+        name = Instance(str)
+        required_name = Instance(str, optional=False)
+        data = Instance(dict, None, {"x":1})
+        cls = Instance((str, list), factory=lambda: "foo")
+
+    a = A()
+    assert a.name is None
+    a.name = "ok"
+    assert a.name == "ok"
+    with pytest.raises(TypeError):
+        a.name = 1
+
+    with pytest.raises(TypeError):
+        a.required_name # No defai;t
+
+    a.required_name = "required"
+    assert a.required_name == "required"
+
+    assert a.data == {"x": 1}
+    a.data = {"status": "ok"}
+    assert a.data["status"] == "ok"
+    with pytest.raises(TypeError):
+        a.data = []
+
+    my_list = [1,2,3]
+    assert a.cls == "foo"
+    a.cls = my_list
+    assert a.cls == my_list
+    a.cls = "str"
+    assert a.cls == "str"
+    with pytest.raises(TypeError):
+        a.cls = {}
+
+
+def test_typed():
+    class A(Atom):
+        name = Typed(str)
+
+    a = A()
+    a.name = "x"
+    with pytest.raises(TypeError):
+        a.name = 1
+

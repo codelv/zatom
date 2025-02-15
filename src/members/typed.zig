@@ -12,9 +12,9 @@ const Member = member.Member;
 // functools.partial
 var partial: ?*Object = null;
 
-pub const InstanceMember = Member("Instance", struct {
-    // Instance takes a single argument kind which is passed to an Instance member
-    // Must initalize the validate_context to an InstanceMember
+pub const TypedMember = Member("Typed", struct {
+    // Typed takes a single argument kind which is passed to an Typed member
+    // Must initalize the validate_context to an TypedMember
     pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
         const kwlist = [_:null][*c]const u8{
             "kind",
@@ -29,7 +29,10 @@ pub const InstanceMember = Member("Instance", struct {
         var factory: ?*Object = null;
         var optional: ?*Object = null;
         try py.parseTupleAndKeywords(args, kwargs, "O|OOOO", @ptrCast(&kwlist), .{ &kind, &init_args, &init_kwargs, &factory, &optional });
-        try self.validateTypeOrTupleOfTypes(kind);
+        if (!Type.check(kind)) {
+            _ = py.typeError("kind must be a type", .{});
+            return error.PyError;
+        }
         self.validate_context = kind.newref();
         errdefer py.clear(&self.validate_context);
 
@@ -42,14 +45,13 @@ pub const InstanceMember = Member("Instance", struct {
             self.default_context = factory.?.newref();
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
             self.info.default_mode = .call;
-            const cls = if (Tuple.check(kind)) try Tuple.get(@ptrCast(kind), 0) else kind;
 
             const partial_kwargs: ?*Dict = blk: {
                 if (init_kwargs) |v| {
                     if (Dict.check(v)) {
                         break :blk @ptrCast(v);
                     } else if (!v.isNone()) {
-                        _ = py.typeError("Instance kwargs must be a dict or None, got: {s}", .{v.typeName()});
+                        _ = py.typeError("Typed kwargs must be a dict or None, got: {s}", .{v.typeName()});
                         return error.PyError;
                     }
                 }
@@ -59,13 +61,13 @@ pub const InstanceMember = Member("Instance", struct {
             const partial_args: *Tuple = blk: {
                 if (init_args) |v| {
                     if (Tuple.check(v)) {
-                        break :blk try Tuple.prepend(@ptrCast(v), cls);
+                        break :blk try Tuple.prepend(@ptrCast(v), kind);
                     } else if (!v.isNone()) {
-                        _ = py.typeError("Instance args must be a tuple or None, got: {s}", .{v.typeName()});
+                        _ = py.typeError("Typed args must be a tuple or None, got: {s}", .{v.typeName()});
                         return error.PyError;
                     }
                 }
-                break :blk try Tuple.pack(.{cls.newref()});
+                break :blk try Tuple.pack(.{kind.newref()});
             };
             defer partial_args.decref();
             self.default_context = try partial.?.call(partial_args, partial_kwargs);
@@ -86,29 +88,22 @@ pub const InstanceMember = Member("Instance", struct {
         if (new.isNone() and self.info.optional) {
             return; // Ok
         }
-        const context = self.validate_context.?;
-        if (!try new.isInstance(context)) {
-            if (py.Tuple.check(context)) {
-                const types_str = try context.str();
-                defer types_str.decref();
-                return self.validateFail(atom, new, types_str.data());
-            } else {
-                return self.validateFail(atom, new, Type.className(@ptrCast(context)));
-            }
-            return error.PyError;
+        const kind: *Type = @ptrCast(self.validate_context.?);
+        if (!new.typeCheck(kind)) {
+            return self.validateFail(atom, new, kind.className());
         }
     }
 });
 
-pub const ForwardInstanceMember = Member("ForwardInstance", struct {
+pub const ForwardTypedMember = Member("ForwardTyped", struct {
 
 });
 
 
 
 const all_types = .{
-    InstanceMember,
-    ForwardInstanceMember,
+    TypedMember,
+    ForwardTypedMember,
 };
 
 pub fn initModule(mod: *py.Module) !void {
@@ -131,3 +126,4 @@ pub fn deinitModule(mod: *py.Module) void {
     }
     py.clear(&partial);
 }
+

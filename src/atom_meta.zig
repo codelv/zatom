@@ -117,6 +117,7 @@ pub const AtomMeta = extern struct {
             if (MemberBase.check(entry.value) and Str.check(entry.key)) {
                 // TODO: Clone if a this is a base class member
                 const member: *MemberBase = @ptrCast(entry.value);
+                member.name = @ptrCast(entry.key);
                 switch (member.info.storage_mode) {
                     .slot => {
                         member.info.index = @intCast(slot_count);
