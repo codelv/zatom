@@ -10,6 +10,14 @@ comptime {
     std.debug.assert(isize == py.c.Py_hash_t);
 }
 
+pub const ChangeTypes = enum(u8) {
+    any,
+    create,
+    update,
+    delete,
+    event,
+};
+
 pub const ObserverInfo = struct {
     observer: *Object,
     change_types: u8,
@@ -20,9 +28,9 @@ pub const ObserverInfo = struct {
 };
 
 pub const PoolModification = union(enum) {
-    add_observer: struct { pool: *ObserverPool, topic: u16, observer: *Object, change_types: u8 },
-    remove_observer: struct { pool: *ObserverPool, topic: u16, observer: *Object },
-    remove_topic: struct { pool: *ObserverPool, topic: u16 },
+    add_observer: struct { pool: *ObserverPool, topic: *Str, observer: *Object, change_types: u8 },
+    remove_observer: struct { pool: *ObserverPool, topic: *Str, observer: *Object },
+    remove_topic: struct { pool: *ObserverPool, topic: *Str },
     clear: *ObserverPool,
     deinit: *ObserverPool,
     release: struct { mgr: *PoolManager, index: u32},
@@ -56,12 +64,15 @@ pub const PoolGuard = struct {
             switch (mod) {
                 .add_observer => |data| {
                     defer data.observer.decref();
+                    defer data.topic.decref();
                     try data.pool.add_observer(data.topic, data.observer, data.change_types);
                 },
                 .remove_topic => |data| {
+                    defer data.topic.decref();
                     try data.pool.remove_topic(data.topic);
                 },
                 .remove_observer => |data| {
+                    defer data.topic.decref();
                     defer data.observer.decref();
                     try data.pool.remove_observer(data.topic, data.observer);
                 },
@@ -79,80 +90,157 @@ pub const PoolGuard = struct {
         }
     }
 
+    // Get dynamic size of the guard
+    pub fn sizeof(self: *Self) usize {
+        var size: usize = @sizeOf(Self);
+        size += @sizeOf(PoolModification) * self.mods.capacity;
+        return size;
+    }
+
     pub fn deinit(self: *Self) void {
         self.mods.clearAndFree();
+    }
+};
+
+
+pub const MemberObservers = struct {
+    pub const ObserverMap = std.AutoHashMapUnmanaged(isize, ObserverInfo);
+    map: ObserverMap = .{},
+    //guard: ?*PoolGuard = null,
+
+    pub fn new(allocator: std.mem.Allocator) py.Error!*MemberObservers {
+        const self = try allocator.create(MemberObservers) catch {
+            _ = py.memoryError();
+            return error.PyError;
+        };
+        self.* = .{};
+        return self;
+    }
+
+    pub fn has_observers(self: *const MemberObservers) bool {
+        return self.map.count() > 0;
+    }
+
+    pub fn has_observer(self: *const MemberObservers, observer: *Object, change_types: u8) py.Error!bool {
+        if (self.map.getPtr(try observer.hash())) |info| {
+            return info.enabled(change_types);
+        }
+        return false;
+    }
+
+    pub fn add_observer(self: *MemberObservers, allocator: std.mem.Allocator, observer: *Object, change_types: u8) py.Error!void {
+        // TODO: guard
+        const hash = try observer.hash();
+        if (self.map.getPtr(hash)) |item| {
+            item.change_types = change_types;
+        } else {
+            try self.map.put(allocator, hash, ObserverInfo{ .observer = observer.newref(), .change_types = change_types });
+        }
+    }
+
+    pub fn remove_observer(self: *MemberObservers, observer: *Object) py.Error!void {
+        // TODO: guard
+        if (self.map.fetchRemove(try observer.hash())) |entry| {
+            entry.value.observer.decref();
+        }
+    }
+
+    pub fn clear(self: *MemberObservers) void {
+        var items = self.map.valueIterator();
+        // Relase all observer references
+        while (items.next()) |item| {
+            item.observer.decref();
+        }
+        self.map.clearRetainingCapacity();
+    }
+
+    pub fn deinit(self: *MemberObservers, allocator: std.mem.Allocator) void {
+        self.clear();
+        self.map.clearAndFree(allocator);
+        allocator.destroy(self);
+        self.* = undefined;
     }
 };
 
 pub const ObserverPool = struct {
     // TODO: Convert to unmanaged...
     // Mapping of observer hash to ObserverInfo
-    pub const ObserverMap = std.AutoHashMap(isize, ObserverInfo);
+    pub const ObserverMap = std.AutoHashMapUnmanaged(isize, ObserverInfo);
 
     // Mapping of member index to ObserverMap
-    pub const TopicMap = std.AutoHashMap(u16, ObserverMap);
+    pub const TopicMap = std.AutoHashMapUnmanaged(isize, ObserverMap);
 
     // Map of member index to observer
     // modifcation of the map invalidates
-    map: TopicMap,
+    map: TopicMap = .{},
     guard: ?*PoolGuard = null,
 
-    pub fn new(allocator: std.mem.Allocator) !*ObserverPool {
-        const pool = try allocator.create(ObserverPool);
-        pool.map = TopicMap.init(allocator);
+    pub fn new(allocator: std.mem.Allocator) py.Error!*ObserverPool {
+        const pool = allocator.create(ObserverPool) catch {
+            _ = py.memoryError();
+            return error.PyError;
+        };
+        pool.* = .{};
         return pool;
     }
 
-    pub fn add_observer(self: *ObserverPool, topic: u16, observer: *Object, change_types: u8) py.Error!void {
+    pub fn hasTopic(self: *ObserverPool, topic: *Str) py.Error!bool {
+        return self.map.contains(try topic.hash());
+    }
+
+    pub fn hasObserver(self: *ObserverPool, topic: *Str, observer: *Object, change_types: u8) py.Error!bool {
+        if (self.map.getPtr(try topic.hash())) |observer_map| {
+            if (observer_map.getPtr(try observer.hash())) |info| {
+                return info.enabled(change_types);
+            }
+        }
+        return false;
+    }
+
+    pub fn addObserver(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, observer: *Object, change_types: u8) !void {
         if (self.guard) |guard| {
-            guard.mods.append(PoolModification{ .add_observer = .{ .pool = self, .topic = topic, .observer = observer.newref(), .change_types = change_types } }) catch {
-                _ = py.memoryError();
-                return error.PyError;
-            };
+            try guard.mods.append(PoolModification{ .add_observer = .{ .pool = self, .topic = topic.newref(), .observer = observer.newref(), .change_types = change_types } });
             return;
         }
-        const hash = try observer.hash();
-        if (!self.map.contains(topic)) {
-            try self.map.put(topic, ObserverMap.init(self.map.allocator));
+
+        const topic_hash = try topic.hash();
+        if (!self.map.contains(topic_hash)) {
+            try self.map.put(allocator, topic_hash, ObserverMap{});
         }
-        const observer_map = self.map.getPtr(topic).?;
-        if (observer_map.getPtr(hash)) |item| {
+        const observer_map = self.map.getPtr(topic_hash).?;
+        const observer_hash = try observer.hash();
+        if (observer_map.getPtr(observer_hash)) |item| {
             item.change_types = change_types;
         } else {
-            try observer_map.put(hash, ObserverInfo{ .observer = observer.newref(), .change_types = change_types });
+            try observer_map.put(allocator, observer_hash, ObserverInfo{ .observer = observer.newref(), .change_types = change_types });
         }
     }
 
     // Remove an observer from the pool. If the pool is guarded
     // by a modification guard this may require allocation.
-    pub fn remove_observer(self: *ObserverPool, topic: u16, observer: *Object) py.Error!void {
+    pub fn removeObserver(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, observer: *Object) !void {
         if (self.guard) |guard| {
-            guard.mods.append(PoolModification{ .remove_observer = .{ .pool = self, .topic = topic, .observer = observer.newref() } }) catch {
-                _ = py.memoryError();
-                return error.PyError;
-            };
+            try guard.mods.append(PoolModification{ .remove_observer = .{ .pool = self, .topic = topic.newref(), .observer = observer.newref() } });
             return;
         }
-        if (self.map.getPtr(topic)) |observer_map| {
-            const hash = try observer.hash();
-            if (observer_map.fetchRemove(hash)) |entry| {
+
+        const topic_hash = try topic.hash();
+        if (self.map.getPtr(topic_hash)) |observer_map| {
+            if (observer_map.fetchRemove(try observer.hash())) |entry| {
                 entry.value.observer.decref();
             }
-            if (observer_map.len == 0) {
-                self.map.removeByPtr(observer_map);
-                observer_map.deinit();
+            if (observer_map.size == 0) {
+                observer_map.deinit(allocator);
+                _ = self.map.remove(topic_hash);
             }
         }
     }
 
     // Remove all observers for a given topic observer from the pool.
     // If the pool is guarded by a modification guard this may require allocation.
-    pub fn remove_topic(self: *ObserverPool, topic: u16) py.Error!void {
+    pub fn removeTopic(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str) !void {
         if (self.guard) |guard| {
-            guard.mods.append(PoolModification{ .remove_topic = .{ .pool = self, .topic = topic } }) catch {
-                _ = py.memoryError();
-                return error.PyError;
-            };
+            try guard.mods.append(PoolModification{ .remove_topic = .{ .pool = self, .topic = topic.newref() } });
             return;
         }
         if (self.map.fetchRemove(topic)) |entry| {
@@ -160,18 +248,15 @@ pub const ObserverPool = struct {
             while (iter.next()) |item| {
                 item.observer.decref();
             }
-            entry.value.deinit();
+            entry.value.deinit(allocator);
         }
     }
 
     // Remove all observers from the pool. If the pool is guarded
     // by a modification guard this may require allocation.
-    pub fn clear(self: *ObserverPool) py.Error!void {
+    pub fn clear(self: *ObserverPool, allocator: std.mem.Allocator) !void {
         if (self.guard) |guard| {
-            guard.mods.append(PoolModification{ .clear = self }) catch {
-                _ = py.memoryError();
-                return error.PyError;
-            };
+            try guard.mods.append(PoolModification{ .clear = self });
             return;
         }
         var topics = self.map.valueIterator();
@@ -181,15 +266,15 @@ pub const ObserverPool = struct {
             while (items.next()) |item| {
                 item.observer.decref();
             }
-            observer_map.deinit();
+            observer_map.deinit(allocator);
         }
         self.map.clearRetainingCapacity();
     }
 
-    pub fn notify(self: *ObserverPool, topic: u16, args: *Tuple, kwargs: ?*Dict, change_types: u8) py.Error!bool {
+    pub fn notify(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, args: *Tuple, kwargs: ?*Dict, change_types: u8) !bool {
         var ok: bool = true;
         if (self.map.getPtr(topic)) |observer_map| {
-            var guard = PoolGuard.init(self, self.map.allocator);
+            var guard = PoolGuard.init(self, allocator);
             defer guard.deinit();
             guard.start(self);
             defer guard.finish() catch {
@@ -204,18 +289,28 @@ pub const ObserverPool = struct {
                         result.decref();
                     }
                 } else {
-                    guard.mods.add(PoolModification{ .remove_observer = .{
+                    try guard.mods.append(PoolModification{ .remove_observer = .{
                         .pool = self,
                         .topic = topic,
                         .observer = item.observer.newref(),
-                    } }) catch {
-                        _ = py.memoryError();
-                        return error.PyError;
-                    };
+                    }});
                 }
             }
         }
         return ok;
+    }
+
+    pub fn sizeof(self: *ObserverPool) usize {
+        var size: usize = @sizeOf(ObserverInfo);
+        if (self.guard) |guard| {
+            size += guard.sizeof();
+        }
+        size += @sizeOf(TopicMap.Entry) * self.map.capacity();
+        var topics = self.map.valueIterator();
+        while (topics.next()) |observer_map| {
+            size += @sizeOf(ObserverMap.Entry) * observer_map.capacity();
+        }
+        return size;
     }
 
     pub fn traverse(self: *ObserverPool, func: py.visitproc, arg: ?*anyopaque) c_int {
@@ -233,11 +328,10 @@ pub const ObserverPool = struct {
 
     // Clear the pool and free all memory
     // Doing this with an active guard is considered a programming error
-    pub fn deinit(self: *ObserverPool) void {
+    pub fn deinit(self: *ObserverPool, allocator: std.mem.Allocator) void {
         std.debug.assert(self.guard == null);
-        self.clear() catch unreachable; // There is no guard so it cannot fail
-        const allocator = self.map.allocator;
-        self.map.deinit();
+        self.clear(allocator) catch unreachable; // There is no guard so it cannot fail
+        self.map.deinit(allocator);
         allocator.destroy(self);
         self.* = undefined;
     }
@@ -267,7 +361,7 @@ pub const PoolManager = struct {
     }
 
     // Get the index of the next available a pool.
-    pub fn acquire(self: PoolManager, allocator: std.mem.Allocator) py.Error!u32 {
+    pub fn acquire(self: *PoolManager, allocator: std.mem.Allocator) py.Error!u32 {
         return self.acquireInternal(allocator) catch {
             _ = py.memoryError();
             return error.PyError;
@@ -282,13 +376,13 @@ pub const PoolManager = struct {
         };
     }
 
-    inline fn acquireInternal(self: PoolManager, allocator: std.mem.Allocator) !u32 {
+    inline fn acquireInternal(self: *PoolManager, allocator: std.mem.Allocator) !u32 {
         if (self.free_slots.items.len == 0) {
             if (self.pools.capacity >= std.math.maxInt(u32)) {
                 return error.PyError; // Limit reached
             }
             const pool = try ObserverPool.new(allocator);
-            errdefer allocator.free(pool);
+            errdefer pool.deinit(allocator);
             try self.pools.append(allocator, pool);
             return @intCast(self.pools.items.len - 1);
         }
@@ -304,17 +398,23 @@ pub const PoolManager = struct {
                 } });
                 return; // Will be release when guard is done
             }
-            try pool.clear();
+            try pool.clear(allocator);
         }
         try self.free_slots.append(allocator, index);
     }
 
+    pub fn sizeof(self: *PoolManager) usize {
+        var size: usize = @sizeOf(PoolManager);
+        size += @sizeOf(?*ObserverPool) * self.pools.capacity;
+        size += @sizeOf(u32) * self.free_slots.capacity;
+        return size;
+    }
+
     // Clear all the pools
     pub fn clear(self: *PoolManager, allocator: std.mem.Allocator) void {
-        _ = allocator; // Needed if pool gets converted to unmanaged objects to sav
         for (self.pools.items, 0..) |ptr, i| {
             if (ptr) |pool| {
-                pool.deinit();
+                pool.deinit(allocator);
             }
             self.pools.items[i] = null;
         }

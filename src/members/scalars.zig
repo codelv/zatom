@@ -1,114 +1,130 @@
 const py = @import("../py.zig");
+const std = @import("std");
 const Object = py.Object;
 const AtomBase = @import("../atom.zig").AtomBase;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
+const StorageMode = member.StorageMode;
 const Member = member.Member;
 
 var empty_str: ?*py.Str = null;
 var empty_bytes: ?*py.Bytes = null;
 
-pub fn default_none() !?*Object {
-    return py.returnNone();
-}
-
-pub fn default_false() !?*Object {
-    return py.returnFalse();
-}
 
 // Does no validation at all
-pub const ValueMember = Member(.{
-    .name = "Value",
-    .default_factory = default_none,
+pub const ValueMember = Member("Value", struct {
+    pub inline fn initDefault() !?*Object {
+        return py.returnNone();
+    }
 });
 
-pub fn validate_callable(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
-    if (!new.isCallable()) {
-        _ = py.typeError("Member value must be a callable");
-        return error.PyError;
-    }
-}
 
-pub const CallableMember = Member(.{
-    .name = "Callable",
-    .validate = validate_callable,
+pub const CallableMember = Member("Callable", struct {
+    pub inline fn validate(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
+        if (!new.isCallable()) {
+            _ = py.typeError("Member value must be a callable", .{});
+            return error.PyError;
+        }
+    }
 });
 
-pub fn validate_bool(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
-    if (!py.Bool.check(new)) {
-        _ = py.typeError("Member must be a bool");
-        return error.PyError;
-    }
-}
 
-pub const BoolMember = Member(.{
-    .name = "Bool",
-    .default_factory = default_false,
-    .storage_mode = .bit,
-    .validate = validate_bool,
+pub const BoolMember = Member("Bool", struct {
+    pub const storage_mode: StorageMode = .bit;
+
+    pub inline fn initDefault() !?*Object{
+        return py.returnFalse();
+    }
+
+    comptime {
+        std.debug.assert(@sizeOf(*usize) == @sizeOf(*Object));
+    }
+
+    pub inline fn writeSlot(self: *MemberBase, _: *AtomBase, slot: *?*Object, value: *Object) py.Error!member.Ownership {
+        const mask = @as(usize, 1) << self.info.bit;
+        const ptr: *usize = @ptrCast(slot);
+        if (value == py.True()) {
+            ptr.* |= mask;
+        } else {
+            ptr.* &= ~mask;
+        }
+        return .borrowed;
+    }
+
+    pub inline fn deleteSlot(self: *MemberBase, _: *AtomBase, slot: *?*Object) void {
+        const ptr: *usize = @ptrCast(slot);
+        const mask = @as(usize, 1) << self.info.bit;
+        ptr.* &= ~mask;
+    }
+
+    pub inline fn readSlot(self: *MemberBase, _: *AtomBase, slot: *?*Object) py.Error!?*Object {
+        const ptr: *usize = @ptrCast(slot);
+        const mask = @as(usize, 1) << self.info.bit;
+        return py.returnBool(ptr.* & mask != 0);
+    }
+
+    pub inline fn validate(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
+        if (!py.Bool.check(new)) {
+            _ = py.typeError("Member must be a bool", .{});
+            return error.PyError;
+        }
+    }
 });
 
-pub fn validate_int(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
-    if (!py.Int.check(new)) {
-        _ = py.typeError("Member must be an int");
-        return error.PyError;
+
+
+pub const IntMember = Member("Int", struct {
+    pub inline fn initDefault() !?*Object{
+        return @ptrCast(try py.Int.new(0));
     }
-}
-
-pub fn default_int() !?*Object {
-    return @ptrCast(try py.Int.new(0));
-}
-
-pub const IntMember = Member(.{
-    .name = "Int",
-    .default_factory = default_int,
-    .validate = validate_int,
+    pub inline fn validate(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
+        if (!py.Int.check(new)) {
+            _ = py.typeError("Member must be an int", .{});
+            return error.PyError;
+        }
+    }
 });
 
-pub fn validate_float(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
-    if (!py.Float.check(new)) {
-        _ = py.typeError("Member must be a float");
-        return error.PyError;
+
+
+pub const FloatMember = Member("Float", struct {
+    pub inline fn initDefault() !?*Object{
+        return @ptrCast(try py.Float.new(0.0));
     }
-}
-
-pub fn default_float() !?*Object {
-    return @ptrCast(try py.Float.new(0.0));
-}
-
-pub const FloatMember = Member(.{
-    .name = "Float",
-    .default_factory = default_float,
-    .validate = validate_float,
+    pub inline fn validate(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
+        if (!py.Float.check(new)) {
+            _ = py.typeError("Member must be a float", .{});
+            return error.PyError;
+        }
+    }
 });
 
-pub fn default_str() !?*Object {
-    return @ptrCast(empty_str.?.newref());
-}
 
-pub fn validate_str(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
-    if (!py.Str.check(new)) {
-        _ = py.typeError("Member must be a str");
-        return error.PyError;
+pub const StrMember = Member("Str", struct {
+    pub inline fn initDefault() !?*Object {
+        return @ptrCast(empty_str.?.newref());
     }
-}
 
-pub const StrMember = Member(.{
-    .name = "Str",
-    .default_factory = default_str,
-    .validate = validate_str,
+    pub inline fn validate(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) !void {
+        if (!py.Str.check(new)) {
+            _ = py.typeError("Member must be a str", .{});
+            return error.PyError;
+        }
+    }
 });
 
-pub fn validate_bytes(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
-    if (!py.Bytes.check(new)) {
-        _ = py.typeError("Member must be bytes");
-        return error.PyError;
-    }
-}
 
-pub const BytesMember = Member(.{
-    .name = "Bytes",
-    .validate = validate_bytes,
+pub const BytesMember = Member("Bytes", struct {
+    pub inline fn initDefault() !?*Object {
+        return @ptrCast(empty_bytes.?.newref());
+    }
+
+    pub inline fn validate(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
+        if (!py.Bytes.check(new)) {
+            _ = py.typeError("Member must be bytes", .{});
+            return error.PyError;
+        }
+    }
 });
 
 const all_types = .{
@@ -127,7 +143,7 @@ pub fn initModule(mod: *py.Module) !void {
     inline for (all_types) |T| {
         try T.initType();
         errdefer T.deinitType();
-        try mod.addObjectRef(T.Spec.name, @ptrCast(T.TypeObject.?));
+        try mod.addObjectRef(T.TypeName, @ptrCast(T.TypeObject.?));
     }
 }
 

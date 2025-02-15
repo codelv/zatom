@@ -42,24 +42,24 @@ pub const AtomMeta = extern struct {
     pub fn validate_atom_members(self: *Self, members: *Dict) !u16 {
         _ = self;
         if (!members.typeCheckSelf()) {
-            _ = py.typeError("atom members must be a dict");
+            _ = py.typeError("atom members must be a dict", .{});
             return error.PyError;
         }
         var pos: isize = 0;
         var count: usize = 0;
         while (members.next(&pos)) |item| {
             if (!Str.check(item.key)) {
-                _ = py.typeError("atom members keys must strings");
+                _ = py.typeError("atom members keys must strings", .{});
                 return error.PyError;
             }
             if (!MemberBase.check(item.value)) {
-                _ = py.typeError("atom members values must Member");
+                _ = py.typeError("atom members values must Member", .{});
                 return error.PyError;
             }
             count += 1;
         }
         if (count > 0xffff) {
-            _ = py.typeError("atom member limit reached");
+            _ = py.typeError("atom member limit reached", .{});
             return error.PyError;
         }
         return @intCast(count);
@@ -85,10 +85,10 @@ pub const AtomMeta = extern struct {
         var enable_weakrefs: bool = undefined;
         py.parseTupleAndKeywords(args, kwargs, "UOO|p", @ptrCast(&kwlist), .{ &name, &bases, &dict, &enable_weakrefs }) catch return null;
         if (!bases.typeCheckExactSelf()) {
-            return py.typeError("AtomMeta's 2nd arg must be a tuple");
+            return py.typeError("AtomMeta's 2nd arg must be a tuple", .{});
         }
         if (!dict.typeCheckExactSelf()) {
-            return py.typeError("AtomMeta's 3rd arg must be a dict");
+            return py.typeError("AtomMeta's 3rd arg must be a dict", .{});
         }
 
         const has_slots = dict.contains(@ptrCast(slots_str.?)) catch return null;
@@ -155,13 +155,13 @@ pub const AtomMeta = extern struct {
         // Modify the bases to
         const num_bases = bases.size() catch return null;
         if (num_bases == 0) {
-            _ = py.typeError("AtomMeta must contain AtomBase");
+            _ = py.typeError("AtomMeta must contain AtomBase", .{});
             return null;
         }
 
         const base = bases.get(0) catch return null; // Borrowed
         if (!base.is(AtomBase.TypeObject)) {
-            return py.typeError("AtomMeta must contain AtomBase");
+            return py.typeError("AtomMeta must contain AtomBase", .{});
         }
 
         // Set to true if bases is redefined and we need to decref it
@@ -180,7 +180,7 @@ pub const AtomMeta = extern struct {
                 bases.set(0, @ptrCast(slot_base.newref())) catch return null;
             }
         } else if (slot_count >= atom.atom_types.len) {
-            return py.typeError("TODO: Dynamic slots");
+            return py.typeError("TODO: Dynamic slots", .{});
         } // else no change needed
 
         // Create a new subclass
@@ -202,7 +202,7 @@ pub const AtomMeta = extern struct {
             const proxy = Dict.newProxy(@ptrCast(members)) catch return null;
             return @ptrCast(proxy);
         }
-        return py.systemError("AtomMeta members were not initialized");
+        return py.systemError("AtomMeta members were not initialized", .{});
     }
 
     pub fn set_atom_members(self: *Self, members: *Dict, _: ?*anyopaque) c_int {
@@ -214,12 +214,12 @@ pub const AtomMeta = extern struct {
 
     pub fn get_member(self: *Self, name: *Object) ?*Object {
         if (!Str.check(name)) {
-            return py.typeError("member name must be a string");
+            return py.typeError("member name must be a string", .{});
         }
         if (self.atom_members) |members| {
             return members.getItemUnchecked(name);
         }
-        return py.systemError("Members are not initialized");
+        return py.systemError("Members are not initialized", .{});
     }
 
     pub fn get_slot_count(self: *Self) ?*Int {
