@@ -20,10 +20,9 @@ pub const ValueMember = Member("Value", struct {
 
 
 pub const CallableMember = Member("Callable", struct {
-    pub inline fn validate(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
         if (!new.isCallable()) {
-            _ = py.typeError("Member value must be a callable", .{});
-            return error.PyError;
+            return self.validateFail(atom, new, "callable");
         }
     }
 });
@@ -63,10 +62,9 @@ pub const BoolMember = Member("Bool", struct {
         return py.returnBool(ptr.* & mask != 0);
     }
 
-    pub inline fn validate(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
         if (!py.Bool.check(new)) {
-            _ = py.typeError("Member must be a bool", .{});
-            return error.PyError;
+            return self.validateFail(atom, new, "bool");
         }
     }
 });
@@ -77,10 +75,9 @@ pub const IntMember = Member("Int", struct {
     pub inline fn initDefault() !?*Object{
         return @ptrCast(try py.Int.new(0));
     }
-    pub inline fn validate(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
         if (!py.Int.check(new)) {
-            _ = py.typeError("Member must be an int", .{});
-            return error.PyError;
+            return self.validateFail(atom, new, "int");
         }
     }
 });
@@ -91,10 +88,9 @@ pub const FloatMember = Member("Float", struct {
     pub inline fn initDefault() !?*Object{
         return @ptrCast(try py.Float.new(0.0));
     }
-    pub inline fn validate(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
         if (!py.Float.check(new)) {
-            _ = py.typeError("Member must be a float", .{});
-            return error.PyError;
+            return self.validateFail(atom, new, "float");
         }
     }
 });
@@ -105,10 +101,9 @@ pub const StrMember = Member("Str", struct {
         return @ptrCast(empty_str.?.newref());
     }
 
-    pub inline fn validate(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) !void {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) !void {
         if (!py.Str.check(new)) {
-            _ = py.typeError("Member must be a str", .{});
-            return error.PyError;
+            return self.validateFail(atom, new, "str");
         }
     }
 });
@@ -119,10 +114,9 @@ pub const BytesMember = Member("Bytes", struct {
         return @ptrCast(empty_bytes.?.newref());
     }
 
-    pub inline fn validate(_: *MemberBase, _: *AtomBase, _: *Object, new: *Object) py.Error!void {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
         if (!py.Bytes.check(new)) {
-            _ = py.typeError("Member must be bytes", .{});
-            return error.PyError;
+            return self.validateFail(atom, new, "bytes");
         }
     }
 });

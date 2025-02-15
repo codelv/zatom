@@ -42,6 +42,19 @@ def test_atom_two_members():
     assert "m1" in C.__atom_members__
 
 
+def test_atom_member_tag():
+    class A(Atom):
+        m = Member().tag(foo=True)
+    assert A.m.metadata is not None
+    assert A.m.metadata['foo'] is True
+    del A.m.metadata
+    assert A.m.metadata is None
+    A.m.metadata = {"bar": 1}
+    assert A.m.metadata == {"bar": 1}
+    with pytest.raises(TypeError):
+        A.m.metadata = 1
+
+
 def test_member_invalid_index():
     class A(Atom):
         m = Int()

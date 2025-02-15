@@ -12,6 +12,7 @@ const MemberBase = member.MemberBase;
 const StorageMode = member.StorageMode;
 const Member = member.Member;
 
+const InstanceMember = @import("instance.zig").InstanceMember;
 
 var event_str: ?*Str = null;
 var type_str: ?*Str = null;
@@ -26,8 +27,8 @@ pub const EventBinder = extern struct {
     pub var TypeObject: ?*py.Type = null;
     pub const BaseType = Object.BaseType;
     base: BaseType,
-    atom: ?*AtomBase,
-    member: ?*EventMember,
+    atom: *AtomBase,
+    member: *EventMember,
 
     pub usingnamespace py.ObjectProtocol(Self);
 
@@ -47,7 +48,7 @@ pub const EventBinder = extern struct {
     }
 
     pub fn call(self: *Self, args: *Tuple, kwargs: ?*Dict) ?*Object {
-        if (kwargs != null and kwargs.?.size() > 0) {
+        if (kwargs != null and kwargs.?.sizeUnchecked() > 0) {
             return py.typeError("An event cannot be triggered with keyword arguments", .{});
         }
         const n = args.size() catch return null;
@@ -55,7 +56,7 @@ pub const EventBinder = extern struct {
             return py.typeError("An event can be triggered with at most 1 argument", .{});
         }
         const value = if (n == 0) py.None() else args.getUnsafe(0).?;
-        EventMember.Impl.setattr( @ptrCast(self.member.?), self.atom.?, value ) catch return null;
+        EventMember.Impl.setattr( @ptrCast(self.member), self.atom, value ) catch return null;
         return py.returnNone();
     }
 
@@ -66,14 +67,14 @@ pub const EventBinder = extern struct {
         if (!callback.isCallable()) {
             return py.typeError("Event callback must be callable", .{});
         }
-        const topic = self.member.?.base.name.?;
-        self.atom.?.addObserver(topic, callback, 0xff) catch return null;
+        const topic = self.member.base.name;
+        self.atom.addObserver(topic, callback, 0xff) catch return null;
         return py.returnNone();
     }
 
     pub fn unbind(self: *Self, callback: *Object) ?*Object {
-        const topic = self.member.?.base.name.?;
-        self.atom.?.removeObserver(topic, callback) catch return null;
+        const topic = self.member.base.name;
+        self.atom.removeObserver(topic, callback) catch return null;
         return py.returnNone();
     }
 
@@ -144,23 +145,47 @@ pub const EventBinder = extern struct {
 
 // The Event member takes no storage
 pub const EventMember = Member("Event", struct{
+    // Event takes no storage slot
     pub const storage_mode: StorageMode = .none;
+
+    // Event takes a single argument kind which is passed to an Instance member
+    // Must initalize the validate_context to an InstanceMember
+    pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
+        const kwlist = [_:null][*c]const u8{"kind"};
+        var kind: ?*Object = null;
+        try py.parseTupleAndKeywords(args, kwargs, "|O", @ptrCast(&kwlist), .{ &kind });
+        if (kind) |v| {
+            // Let InstanceMember figure out if kind is valid
+            self.validate_context = try InstanceMember.TypeObject.?.callArgs(.{v});
+        }
+    }
 
     pub fn getattr(self: *MemberBase, atom: *AtomBase) !*Object {
         return @ptrCast(try EventBinder.TypeObject.?.callArgs(.{self, atom}));
     }
 
-    pub fn setattr(self: *MemberBase, atom: *AtomBase, value: *Object) !void {
-        if (!self.hasObserversInternal() and !try atom.hasObservers(self.name.?)) {
-            return;
+    pub fn validate(self: *MemberBase, atom: *AtomBase, oldvalue: *Object, value: *Object) py.Error!void {
+        if (self.validate_context) |context| {
+            std.debug.assert(InstanceMember.check(context));
+            const instance: *InstanceMember = @ptrCast(context);
+            try instance.validate(atom, oldvalue, value);
         }
+    }
+
+    pub fn setattr(self: *MemberBase, atom: *AtomBase, value: *Object) !void {
+        if (!self.shouldNotify(atom)) {
+            return; // Nobody is listening
+        }
+
+        try validate(self, atom, py.None(), value);
+
         var change = try Dict.new();
         defer change.decref();
         try change.set(@ptrCast(type_str.?), @ptrCast(event_str.?));
         try change.set(@ptrCast(object_str.?), @ptrCast(atom));
-        try change.set(@ptrCast(name_str.?), @ptrCast(self.name.?));
+        try change.set(@ptrCast(name_str.?), @ptrCast(self.name));
         try change.set(@ptrCast(value_str.?), value);
-        try self.notify(atom, change);
+        try self.notifyChange(atom, change);
     }
 
     pub fn delattr(_: *MemberBase, _: *AtomBase) !void {

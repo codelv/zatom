@@ -62,7 +62,7 @@ pub const AtomBase = extern struct {
     }
 
     pub fn init(self: *Self, args: *Tuple, kwargs: ?*Dict) c_int {
-        if (args.sizeUnsafe() > 0) {
+        if (args.sizeUnchecked() > 0) {
             _ = py.typeError("__init__() takes no positional arguments", .{});
             return -1;
         }
@@ -146,7 +146,7 @@ pub const AtomBase = extern struct {
             return py.returnBool(self.info.has_observers);
         }
         if (!topic.typeCheckSelf()) {
-            return py.typeError("has_observers topic must be a str");
+            return py.typeError("has_observers topic must be a str", .{});
         }
         return py.returnBool(self.hasObservers(topic) catch return null);
     }
@@ -178,7 +178,7 @@ pub const AtomBase = extern struct {
     }
 
     // --------------------------------------------------------------------------
-    // Type definition
+    // Type def
     // --------------------------------------------------------------------------
     pub fn dealloc(self: *Self) void {
         self.gcUntrack();

@@ -16,6 +16,7 @@ const MemberObservers = @import("observer_pool.zig").MemberObservers;
 const package_name = @import("api.zig").package_name;
 const scalars = @import("members/scalars.zig");
 const event = @import("members/event.zig");
+const instance = @import("members/instance.zig");
 
 pub const StorageMode = enum(u2) {
     slot = 0, // Takes a full slot
@@ -36,6 +37,7 @@ pub const MemberInfo = packed struct {
     reserved: u8, // Reduce this to so @sizeOf(MemberInfo) == 32 bits
 };
 
+
 // Base Member class
 pub const MemberBase = extern struct {
     // Reference to the type. This is set in ready
@@ -50,7 +52,7 @@ pub const MemberBase = extern struct {
     default_context: ?*Object = null,
     validate_context: ?*Object = null,
     coercer_context: ?*Object = null,
-    name: ?*Str = null,
+    name: *Str = undefined,
     info: MemberInfo,
 
     // Import the object protocol
@@ -67,8 +69,12 @@ pub const MemberBase = extern struct {
         return self;
     }
 
+    // --------------------------------------------------------------------------
+    // Properties
+    // --------------------------------------------------------------------------
+
     pub fn get_name(self: *Self) *Str {
-        return self.name.?.newref();
+        return self.name.newref();
     }
 
     pub fn set_name(self: *Self, value: *Object, _: ?*anyopaque) c_int {
@@ -115,27 +121,28 @@ pub const MemberBase = extern struct {
         return -1;
     }
 
-    pub fn get_metadata(self: *Self) ?*Dict {
-        if (self.metadata == null) {
-            self.metadata = Dict.new() catch return null;
+    pub fn get_metadata(self: *Self) ?*Object {
+        if (self.metadata) |metadata| {
+            return @ptrCast(metadata.newref());
         }
-        return self.metadata.?.newref();
+        return py.returnNone();
     }
 
     pub fn set_metadata(self: *Self, value: ?*Object, _: ?*anyopaque) c_int {
-        if (value) |v| {
-            if (v == py.None()) {
-                py.xsetref(@ptrCast(&self.metadata), null);
-                return 0;
-            } else if (!Dict.check(v)) {
-                _ = py.typeError("Member metadata must be a dict", .{});
-                return -1;
-            }
+        if (value == null or value.?.isNone()) {
+            py.xsetref(@ptrCast(&self.metadata), null);
+            return 0;
+        } else if (Dict.check(value.?)) {
+            py.xsetref(@ptrCast(&self.metadata), value);
+            return 0;
         }
-        py.xsetref(@ptrCast(&self.metadata), value);
-        return 0;
+        _ = py.typeError("Member metadata must be a dict or None", .{});
+        return -1;
     }
 
+    // --------------------------------------------------------------------------
+    // Methods
+    // --------------------------------------------------------------------------
     pub fn get_slot(self: *Self, atom: *AtomBase) ?*Object {
         if (self.info.storage_mode == .slot) {
             if (!atom.typeCheckSelf()) {
@@ -182,21 +189,14 @@ pub const MemberBase = extern struct {
         return py.returnBool(self.hasObserversInternal());
     }
 
-    pub fn hasObserversInternal(self: *Self) bool {
-        if (self.observers) |pool| {
-            return pool.has_observers();
-        }
-        return false;
-    }
-
     pub fn has_observer(self: *Self, args: [*]*Object, n: isize) ?*Object {
         var change_types: u8 = 0xff;
         if (n < 1 or n > 2) {
-            return py.typeError("has_observer takes 1 or 2 arguments");
+            return py.typeError("has_observer takes 1 or 2 arguments", .{});
         }
         if (n == 2) {
             if (!Int.check(args[1])) {
-                return py.typeError("has_observer 2nd arg must be an int");
+                return py.typeError("has_observer 2nd arg must be an int", .{});
             }
             change_types = Int.as(@ptrCast(args[1]), u8) catch return null;
         }
@@ -214,66 +214,186 @@ pub const MemberBase = extern struct {
         return py.returnNone();
     }
 
+
+    pub fn clone(self: *Self) ?*Object {
+        return self.cloneInternal() catch return null;
+    }
+
+    pub fn notify(self: *Self, args: *Tuple, kwargs: ?*Dict) ?*Object {
+        const n = args.size() catch return null;
+        if (n < 1) {
+            return py.typeError("notify() requires at least 1 argument", .{});
+        }
+        const atom: *AtomBase = @ptrCast(args.getUnsafe(0).?);
+        if (!atom.typeCheckSelf()) {
+            return py.typeError("notify() 1st argument must be an Atom instance", .{});
+        }
+        const newargs = args.slice(1, n-1) catch return null;
+        defer newargs.decref();
+        self.notifyInternal(atom, newargs, kwargs, 0xFF) catch return null;
+        return py.returnNone();
+    }
+
+    pub fn tag(self: *Self, args: *Tuple, kwargs: ?*Dict) ?*Object {
+        if (args.sizeUnchecked() != 0) {
+            return py.typeError("tag() takes no positional arguments", .{});
+        }
+        if (kwargs) |kw| {
+            if (self.metadata) |metadata| {
+                metadata.update(@ptrCast(kw)) catch return null;
+            } else {
+                self.metadata = kw.copy() catch return null;
+            }
+            return @ptrCast(self.newref());
+        }
+        return py.typeError("tag() requires keyword arguments", .{});
+    }
+
+    // --------------------------------------------------------------------------
+    // Internal api
+    // --------------------------------------------------------------------------
+    // Helper function for validation failures
+    pub fn validateFail(self: *Self, atom: *AtomBase, value: *Object, expected: [:0]const u8) py.Error!void {
+        _ = py.typeError(
+            "The '{s}' member on the '{s}' object must be of type '{s}'. Got object of type '{s}' instead"
+            ,.{
+               self.name.data(),
+               atom.typeName(),
+               expected,
+               value.typeName(),
+            }
+        );
+        return error.PyError;
+    }
+
+    pub fn validateTypeOrTupleOfTypes(self: *Self, kind: *Object) py.Error!void {
+        if (Type.check(kind)) {
+            return;
+        } else if (Tuple.check(kind)) {
+            const kinds: *Tuple = @ptrCast(kind);
+            const n = try kinds.size();
+            if (n == 0) {
+                _ = py.typeError("{s} kind must be a type or tuple of types. Got an empty tuple", .{self.typeName()});
+                return error.PyError;
+            }
+            for (0..n) |i| {
+                const obj = kinds.getUnsafe(i).?;
+                if (!Type.check(obj)) {
+                    _ = py.typeError("{s} kind must be a type or tuple of types. Got a tuple with '{s}'", .{
+                        self.typeName(),
+                        obj.typeName(),
+                    });
+                    return error.PyError;
+                }
+            }
+            return;
+        } else {
+            _ = py.typeError("{s} kind must be a type or tuple of types. Got an empty tuple", .{self.typeName()});
+            return error.PyError;
+        }
+    }
+
+    pub fn shouldNotify(self: *Self, atom: *AtomBase) bool {
+        // TODO: normal atom seems to ignore the disabled flag
+        return (
+            !atom.info.notifications_disabled
+            and (
+                self.hasObserversInternal()
+                or atom.hasObservers(self.name) catch unreachable
+            )
+        );
+    }
+    pub fn hasObserversInternal(self: *Self) bool {
+        if (self.observers) |pool| {
+            return pool.count() > 0;
+        }
+        return false;
+    }
+
+    pub fn notifyInternal(self: *Self, atom: *AtomBase, args: *Tuple, kwargs: ?*Dict, change_types: u8) py.Error!void {
+        if (self.observers) |observers| {
+            observers.notify(atom, args, kwargs, change_types) catch |err| {
+                switch(err) {
+                    error.PyError => {},
+                    error.OutOfMemory => {_ = py.memoryError();}
+                }
+                return error.PyError;
+            };
+        }
+    }
+
     // Generic notify
-    pub fn notify(self: *Self, atom: *AtomBase, change: *Dict) !void {
+    pub fn notifyChange(self: *Self, atom: *AtomBase, change: *Dict) !void {
         _ = self;
         _ = atom;
         _ = change;
     }
 
     pub fn notifyCreate(self: *Self, atom: *AtomBase, newvalue: *Object) !void {
-        _ = self;
-        _ = atom;
+        if (!self.shouldNotify(atom)) {
+            return; // Nobody is listening
+        }
         _ = newvalue;
         // TODO: Implement
     }
 
     pub fn notifyUpdate(self: *Self, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) !void {
-        _ = self;
-        _ = atom;
+        if (!self.shouldNotify(atom)) {
+            return; // Nobody is listening
+        }
         _ = oldvalue;
         _ = newvalue;
         // TODO: Implement
     }
 
     pub fn notifyDelete(self: *Self, atom: *AtomBase, oldvalue: *Object) !void {
-        _ = self;
-        _ = atom;
+        if (!self.shouldNotify(atom)) {
+            return; // Nobody is listening
+        }
         _ = oldvalue;
         // TODO: Implement
-    }
-
-    pub fn clone(self: *Self) ?*Object {
-        return self.cloneInternal() catch return null;
     }
 
     pub fn cloneInternal(self: *Self) !*Object {
         const result: *Self = @ptrCast(try self.typeref().genericNew(null, null));
         errdefer result.decref();
         result.info = self.info;
-        result.name = self.name.?.newref();
-        errdefer result.name.?.decref();
+        result.name = self.name.newref();
+        errdefer result.name.decref();
 
         if (self.metadata) |metadata| {
             result.metadata = try metadata.copy();
         }
         errdefer if (result.metadata) |metadata| metadata.decref();
 
-        if (self.default_context) |context| {
-            result.default_context = context.newref();
+        inline for (.{"default", "validate", "coercer"}) |name| {
+            const field_name = name ++ "_context";
+            if (@field(self, field_name)) |context| {
+                @field(result, field_name) = context.newref();
+            }
+            errdefer if (@field(result, field_name)) |context| context.decref();
         }
-        errdefer if (result.default_context) |context| context.decref();
-
-        if (self.validate_context) |context| {
-            result.validate_context = context.newref();
-        }
-        errdefer if (result.validate_context) |context| context.decref();
-        if (self.coercer_context) |context| {
-            result.coercer_context = context.newref();
-        }
-        errdefer if (result.coercer_context) |context| context.decref();
-
         return @ptrCast(result);
+    }
+
+    // --------------------------------------------------------------------------
+    // Type def
+    // --------------------------------------------------------------------------
+    pub fn dealloc(self: *Self) void {
+        self.gcUntrack();
+        _ = self.clear();
+        self.typeref().free(@ptrCast(self));
+    }
+
+    pub fn clear(self: *Self) c_int {
+        py.clearAll(.{
+            &self.name,
+            &self.metadata,
+            &self.default_context,
+            &self.validate_context,
+            &self.coercer_context,
+        });
+        return 0;
     }
 
     // AtomBase uses this to selectively clear slots
@@ -292,23 +412,6 @@ pub const MemberBase = extern struct {
                 return py.visit(ptr.*, visit, arg);
             }
         }
-        return 0;
-    }
-
-    pub fn dealloc(self: *Self) void {
-        self.gcUntrack();
-        _ = self.clear();
-        self.typeref().free(@ptrCast(self));
-    }
-
-    pub fn clear(self: *Self) c_int {
-        py.clearAll(.{
-            &self.name,
-            &self.metadata,
-            &self.default_context,
-            &self.validate_context,
-            &self.coercer_context,
-        });
         return 0;
     }
 
@@ -335,6 +438,7 @@ pub const MemberBase = extern struct {
         .{ .ml_name = "get_slot", .ml_meth = @constCast(@ptrCast(&get_slot)), .ml_flags = py.c.METH_O, .ml_doc = "Get slot value directly" },
         .{ .ml_name = "set_slot", .ml_meth = @constCast(@ptrCast(&set_slot)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Set slot value directly" },
         .{ .ml_name = "del_slot", .ml_meth = @constCast(@ptrCast(&del_slot)), .ml_flags = py.c.METH_O, .ml_doc = "Del slot value directly" },
+        .{ .ml_name = "tag", .ml_meth = @constCast(@ptrCast(&tag)), .ml_flags = py.c.METH_VARARGS | py.c.METH_KEYWORDS, .ml_doc = "Tag the member with metadata" },
         .{ .ml_name = "clone", .ml_meth = @constCast(@ptrCast(&clone)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Clone the member" },
         .{}, // sentinel
     };
@@ -386,58 +490,9 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
             return obj.typeCheck(TypeObject.?);
         }
 
-        pub fn init(self: *Self, args: *Tuple, kwargs: ?*Dict) c_int {
-            if (comptime @hasDecl(impl, "storage_mode")) {
-                self.base.info.storage_mode = impl.storage_mode;
-            }
-            if (comptime @hasDecl(impl, "default_mode")) {
-                self.base.info.default_mode = impl.default_mode;
-            }
-            if (comptime @hasDecl(impl, "init")) {
-                impl.init(@ptrCast(self), args, kwargs) catch return -1;
-            } else {
-                const kwlist = [_:null][*c]const u8{
-                    "default",
-                    "factory",
-                };
-                var default_context: ?*Object = null;
-                var default_factory: ?*Object = null;
-                py.parseTupleAndKeywords(args, kwargs, "|OO", @ptrCast(&kwlist), .{ &default_context, &default_factory }) catch return -1;
-
-                if (default_context) |context| {
-                    self.base.default_context = context.newref();
-                } else if (comptime @hasDecl(impl, "initDefault")) {
-                    self.base.default_context = impl.initDefault() catch return -1;
-                }
-            }
-            return 0;
-        }
-
-        pub fn __get__(self: *Self, cls: ?*AtomBase, _: ?*Object) ?*Object {
-            if (cls) |atom| {
-                if (!atom.typeCheckSelf()) {
-                    return py.typeError("Members can only be used on Atom objects", .{});
-                }
-                const handler = comptime if (@hasDecl(impl, "getattr")) impl.getattr else Self.getattr;
-                return handler(@ptrCast(self), atom) catch null;
-            }
-            return @ptrCast(self.newref());
-        }
-
-        pub fn __set__(self: *Self, atom: *AtomBase, value: ?*Object) c_int {
-            if (!atom.typeCheckSelf()) {
-                _ = py.typeError("Members can only be used on Atom objects", .{});
-                return -1;
-            }
-            if (value) |v| {
-                const handler = comptime if (@hasDecl(impl, "setattr")) impl.setattr else Self.setattr;
-                handler(@ptrCast(self), atom, v) catch return -1;
-            } else {
-                const handler = comptime if (@hasDecl(impl, "delattr")) impl.delattr else Self.delattr;
-                handler(@ptrCast(self), atom) catch return -1;
-            }
-            return 0;
-        }
+        // --------------------------------------------------------------------------
+        // Custom member api
+        // --------------------------------------------------------------------------
 
         // Returns new reference
         pub fn default(self: *Self, atom: *AtomBase) !*Object {
@@ -491,7 +546,6 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
             return null;
         }
 
-
         // Default getattr implementation provides normal slot behavior
         // Returns new reference
         pub fn getattr(self: *Self, atom: *AtomBase) !*Object {
@@ -516,7 +570,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                 return value.newref();
             } else {
                 // @branchHint(.cold);
-                _ = py.attributeError("Member %s has no slot", .{self.base.name});
+                _ = py.attributeError("Member {s} has no slot", .{self.base.name.data()});
                 return error.PyError;
             }
         }
@@ -581,6 +635,65 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
             // else do nothing
         }
 
+        // --------------------------------------------------------------------------
+        // Type def
+        // --------------------------------------------------------------------------
+        pub fn init(self: *Self, args: *Tuple, kwargs: ?*Dict) c_int {
+            if (comptime @hasDecl(impl, "storage_mode")) {
+                self.base.info.storage_mode = impl.storage_mode;
+            }
+            if (comptime @hasDecl(impl, "default_mode")) {
+                self.base.info.default_mode = impl.default_mode;
+            }
+            if (comptime @hasDecl(impl, "init")) {
+                if (comptime @hasDecl(impl, "initDefault")) {
+                    @compileError("initDefault is ignored when init is used");
+                }
+                impl.init(@ptrCast(self), args, kwargs) catch return -1;
+            } else {
+                const kwlist = [_:null][*c]const u8{
+                    "default",
+                    "factory",
+                };
+                var default_context: ?*Object = null;
+                var default_factory: ?*Object = null;
+                py.parseTupleAndKeywords(args, kwargs, "|OO", @ptrCast(&kwlist), .{ &default_context, &default_factory }) catch return -1;
+
+                if (default_context) |context| {
+                    self.base.default_context = context.newref();
+                } else if (comptime @hasDecl(impl, "initDefault")) {
+                    self.base.default_context = impl.initDefault() catch return -1;
+                }
+            }
+            return 0;
+        }
+
+        pub fn __get__(self: *Self, cls: ?*AtomBase, _: ?*Object) ?*Object {
+            if (cls) |atom| {
+                if (!atom.typeCheckSelf()) {
+                    return py.typeError("Members can only be used on Atom objects", .{});
+                }
+                const handler = comptime if (@hasDecl(impl, "getattr")) impl.getattr else Self.getattr;
+                return handler(@ptrCast(self), atom) catch null;
+            }
+            return @ptrCast(self.newref());
+        }
+
+        pub fn __set__(self: *Self, atom: *AtomBase, value: ?*Object) c_int {
+            if (!atom.typeCheckSelf()) {
+                _ = py.typeError("Members can only be used on Atom objects", .{});
+                return -1;
+            }
+            if (value) |v| {
+                const handler = comptime if (@hasDecl(impl, "setattr")) impl.setattr else Self.setattr;
+                handler(@ptrCast(self), atom, v) catch return -1;
+            } else {
+                const handler = comptime if (@hasDecl(impl, "delattr")) impl.delattr else Self.delattr;
+                handler(@ptrCast(self), atom) catch return -1;
+            }
+            return 0;
+        }
+
         const type_slots = [_]py.TypeSlot{
             .{ .slot = py.c.Py_tp_init, .pfunc = @constCast(@ptrCast(&init)) },
             .{ .slot = py.c.Py_tp_descr_get, .pfunc = @constCast(@ptrCast(&__get__)) },
@@ -615,6 +728,9 @@ pub fn initModule(mod: *py.Module) !void {
     try scalars.initModule(mod);
     errdefer scalars.deinitModule(mod);
 
+    try instance.initModule(mod);
+    errdefer instance.deinitModule(mod);
+
     try event.initModule(mod);
     errdefer event.deinitModule(mod);
 }
@@ -624,4 +740,5 @@ pub fn deinitModule(mod: *py.Module) void {
     MemberBase.deinitType();
     scalars.deinitModule(mod);
     event.deinitModule(mod);
+    instance.deinitModule(mod);
 }
