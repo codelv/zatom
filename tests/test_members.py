@@ -252,4 +252,42 @@ def test_enum():
 def test_event():
     class A(Atom):
         activated = Event()
-        clicked = Event(dict)
+        clicked = Event(str)
+
+    assert A.activated.index is None
+    a = A()
+
+    changes = []
+
+    def observer(change):
+        changes.append(change)
+
+    a.activated.bind(observer)
+    a.activated(1)
+    assert changes[-1] == {
+        "type": "event",
+        "object": a,
+        "name": "activated",
+        "value": 1,
+    }
+    with pytest.raises(TypeError):
+        a.activated(extra=True)
+    with pytest.raises(TypeError):
+        a.activated(1, 2)
+    a.activated.unbind(observer)
+    assert len(changes) == 1
+    a.activated(2)
+    assert len(changes) == 1
+
+    a.clicked.bind(observer)
+    a.clicked("right")
+    assert len(changes) == 2
+    assert changes[-1] == {
+        "type": "event",
+        "object": a,
+        "name": "clicked",
+        "value": "right",
+    }
+
+    with pytest.raises(TypeError):
+        a.clicked(1)

@@ -208,17 +208,19 @@ pub const AtomBase = extern struct {
     }
 
     pub fn observe(self: *Self, args: [*]*Object, n: isize) ?*Object {
+        const msg = "Invalid arguments. Signature is observe(topics: str | Iterable[str], observer: Callable, change_types: int=0xff)";
         if (n < 2 or n > 3 or !args[1].isCallable()) {
-            return py.typeError("Invalid arguments. Signature is observe(topics: str | Iterable[str], observer: Callable, change_types: int=0xff)", .{});
+            return py.typeError(msg, .{});
         }
         const topic = args[0];
         const callback = args[1];
         const change_types: u8 = blk: {
             if (n == 3) {
-                if (!Int.check(args[2])) {
-                    return py.typeError("change_types must be an integer", .{});
+                const v = args[2];
+                if (!Int.check(v)) {
+                    return py.typeError(msg, .{});
                 }
-                break :blk Int.as(@ptrCast(args[2]), u8) catch return null;
+                break :blk Int.as(@ptrCast(v), u8) catch return null;
             }
             break :blk @intFromEnum(ChangeType.any);
         };
@@ -229,7 +231,7 @@ pub const AtomBase = extern struct {
             while (iter.next() catch return null) |item| {
                 defer item.decref();
                 if (!Str.check(item)) {
-                    return py.typeError("topics names must be str", .{});
+                    return py.typeError(msg, .{});
                 }
                 self.addDynamicObserver(@ptrCast(item), callback, change_types) catch return null;
             }

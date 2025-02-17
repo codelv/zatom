@@ -96,8 +96,11 @@ pub const MemberBase = extern struct {
         return 0;
     }
 
-    pub fn get_index(self: *Self) ?*Int {
-        return Int.fromNumberUnchecked(self.info.index);
+    pub fn get_index(self: *Self) ?*Object {
+        if (self.info.storage_mode == .none) {
+            return py.returnNone();
+        }
+        return @ptrCast(Int.fromNumberUnchecked(self.info.index));
     }
 
     pub fn set_index(self: *Self, value: ?*Object, _: ?*anyopaque) c_int {
@@ -276,13 +279,14 @@ pub const MemberBase = extern struct {
     }
 
     pub fn has_observer(self: *Self, args: [*]*Object, n: isize) ?*Object {
+        const msg = "Invalid arguments. Signature is has_observer(observer: str | Callable, change_types: int = 0xff)";
         var change_types: u8 = 0xff;
         if (n < 1 or n > 2) {
-            return py.typeError("has_observer takes 1 or 2 arguments", .{});
+            return py.typeError(msg, .{});
         }
         if (n == 2) {
             if (!Int.check(args[1])) {
-                return py.typeError("has_observer 2nd arg must be an int", .{});
+                return py.typeError(msg, .{});
             }
             change_types = Int.as(@ptrCast(args[1]), u8) catch return null;
         }
@@ -292,9 +296,36 @@ pub const MemberBase = extern struct {
         return py.returnFalse();
     }
 
+    pub fn add_static_observer(self: *Self, args: [*]*Object, n: isize) ?*Object {
+        const msg = "Invalid arguments. Signature is add_static_observer(observer: str | Callable, change_types: int = 0xff)";
+        if (n < 1 or n < 2) {
+            return py.typeError(msg, .{});
+        }
+        const observer = args[0];
+        if (!Str.check(observer) and !observer.isCallable()) {
+            return py.typeError(msg, .{});
+        }
+        const change_types = blk: {
+            if (n == 2) {
+                const v = args[1];
+                if (!Int.check(v)) {
+                    return py.typeError(msg, .{});
+                }
+                break :blk Int.as(@ptrCast(v), u8) catch return null;
+            }
+            break :blk @intFromEnum(ChangeType.any);
+        };
+
+
+        if (self.staticObservers()) |pool| {
+            pool.addObserver(py.allocator, self.name, observer, change_types) catch return null;
+        }
+        return py.returnNone();
+    }
+
     pub fn remove_static_observer(self: *Self, observer: *Object) ?*Object {
         if (self.staticObservers()) |pool| {
-            pool.removeObserver(self.name, observer) catch return null;
+            pool.removeObserver(py.allocator, self.name, observer) catch return null;
         }
         return py.returnNone();
     }
@@ -383,6 +414,7 @@ pub const MemberBase = extern struct {
     pub fn shouldNotify(self: *Self, atom: *AtomBase) bool {
         return (!atom.info.notifications_disabled and atom.hasAnyObservers(self.name) catch unreachable);
     }
+
     pub fn hasObserversInternal(self: *Self) bool {
         if (self.staticObservers()) |pool| {
             return pool.hasTopic(self.name) catch unreachable;
@@ -440,6 +472,11 @@ pub const MemberBase = extern struct {
         result.name = self.name.newref();
         errdefer result.name.decref();
 
+        if (self.owner) |o| {
+            result.owner = o.newref();
+        }
+        errdefer if (result.owner) |o| o.decref();
+
         if (self.metadata) |metadata| {
             result.metadata = try metadata.copy();
         }
@@ -478,6 +515,7 @@ pub const MemberBase = extern struct {
     pub fn clear(self: *Self) c_int {
         py.clearAll(.{
             &self.name,
+            &self.owner,
             &self.metadata,
             &self.default_context,
             &self.validate_context,
@@ -509,6 +547,7 @@ pub const MemberBase = extern struct {
     pub fn traverse(self: *Self, visit: py.visitproc, arg: ?*anyopaque) c_int {
         return py.visitAll(.{
             self.name,
+            self.owner,
             self.metadata,
             self.default_context,
             self.validate_context,
@@ -530,6 +569,10 @@ pub const MemberBase = extern struct {
         .{ .ml_name = "set_slot", .ml_meth = @constCast(@ptrCast(&set_slot)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Set slot value directly" },
         .{ .ml_name = "del_slot", .ml_meth = @constCast(@ptrCast(&del_slot)), .ml_flags = py.c.METH_O, .ml_doc = "Del slot value directly" },
         .{ .ml_name = "notify", .ml_meth = @constCast(@ptrCast(&notify)), .ml_flags = py.c.METH_VARARGS | py.c.METH_KEYWORDS, .ml_doc = "Notify the observers for the given member and atom." },
+        .{ .ml_name = "has_observers", .ml_meth = @constCast(@ptrCast(&has_observers)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Get whether or not this member has observers." },
+        .{ .ml_name = "has_observer", .ml_meth = @constCast(@ptrCast(&has_observer)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Get whether or not the member already has the given observer." },
+        .{ .ml_name = "add_static_observer", .ml_meth = @constCast(@ptrCast(&add_static_observer)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Add the name of a method to call on all atoms when the member changes." },
+        .{ .ml_name = "remove_static_observer", .ml_meth = @constCast(@ptrCast(&remove_static_observer)), .ml_flags = py.c.METH_O, .ml_doc = "Remove the name of a method to call on all atoms when the member changes." },
         .{ .ml_name = "tag", .ml_meth = @constCast(@ptrCast(&tag)), .ml_flags = py.c.METH_VARARGS | py.c.METH_KEYWORDS, .ml_doc = "Tag the member with metadata" },
         .{ .ml_name = "clone", .ml_meth = @constCast(@ptrCast(&clone)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Clone the member" },
         .{}, // sentinel
