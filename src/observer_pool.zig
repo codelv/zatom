@@ -31,7 +31,6 @@ pub const ObserverInfo = struct {
     }
 };
 
-
 pub const PoolGuard = struct {
     const Self = @This();
 
@@ -41,7 +40,7 @@ pub const PoolGuard = struct {
         remove_topic: struct { pool: *ObserverPool, topic: *Str },
         clear: *ObserverPool,
         deinit: *ObserverPool,
-        release: struct { mgr: *PoolManager, index: u32},
+        release: struct { mgr: *PoolManager, index: u32 },
     };
 
     owner: *ObserverPool,
@@ -112,7 +111,6 @@ pub const PoolGuard = struct {
         self.mods.clearAndFree();
     }
 };
-
 
 // pub const MemberGuard = struct {
 //     const Self = @This();
@@ -387,7 +385,9 @@ pub const ObserverPool = struct {
             var guard = PoolGuard.init(self, allocator);
             defer guard.deinit();
             guard.start();
-            defer guard.finish() catch {ok = false;};
+            defer guard.finish() catch {
+                ok = false;
+            };
 
             var items = observer_map.valueIterator();
             while (items.next()) |item| {
@@ -401,7 +401,7 @@ pub const ObserverPool = struct {
                         .pool = self,
                         .topic = topic,
                         .observer = item.observer.newref(),
-                    }});
+                    } });
                 }
             }
         }
@@ -446,7 +446,6 @@ pub const ObserverPool = struct {
         self.* = undefined;
     }
 };
-
 
 pub const PoolManager = struct {
     const PoolList = std.ArrayListUnmanaged(?*ObserverPool);
@@ -502,10 +501,7 @@ pub const PoolManager = struct {
     inline fn releaseInternal(self: *PoolManager, allocator: std.mem.Allocator, index: u32) !void {
         if (self.get(index)) |pool| {
             if (pool.guard) |guard| {
-                try guard.mods.append(.{ .release = .{
-                    .mgr = self,
-                    .index = index
-                } });
+                try guard.mods.append(.{ .release = .{ .mgr = self, .index = index } });
                 return; // Will be release when guard is done
             }
             try pool.clear(allocator);

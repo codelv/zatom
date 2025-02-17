@@ -25,11 +25,11 @@ fn modexec(mod: *py.Module) !c_int {
 pub export fn atom_modexec(mod: *py.Module) c_int {
     return modexec(mod) catch |err| switch (err) {
         error.PyError => -1, // Python error
-//         else => blk: {
-//             // Set error if a sign error ocurred
-//             _ = py.systemError("atom init failed");
-//             break :blk -1;
-//         },
+        //         else => blk: {
+        //             // Set error if a sign error ocurred
+        //             _ = py.systemError("atom init failed");
+        //             break :blk -1;
+        //         },
     };
 }
 

@@ -43,7 +43,7 @@ pub const EnumMember = Member("Enum", struct {
             _ = py.typeError("bitsize out of range", .{});
             return error.PyError;
         }
-        self.info.width = @intCast(bitsize-1);
+        self.info.width = @intCast(bitsize - 1);
         self.default_context = default_value.newref();
         self.validate_context = @ptrCast(args.newref());
     }
@@ -63,18 +63,15 @@ pub const EnumMember = Member("Enum", struct {
     pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
         const items: *Tuple = @ptrCast(self.validate_context.?);
         if (!try items.contains(new)) {
-            _ = py.valueError(
-                "invalid enum value for '{s}' of '{s}'. Got '{s}'",.{
-                    self.name.data(),
-                    atom.typeName(),
-                    new.typeName(),
-                }
-            );
+            _ = py.valueError("invalid enum value for '{s}' of '{s}'. Got '{s}'", .{
+                self.name.data(),
+                atom.typeName(),
+                new.typeName(),
+            });
             return error.PyError;
         }
     }
 });
-
 
 const all_types = .{
     EnumMember,

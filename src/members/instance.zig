@@ -75,7 +75,7 @@ pub const InstanceMember = Member("Instance", struct {
 
         // If a factory or init args were provided set to to not optional
         // Unless explicitly defined as optional or not
-        if (py.notNone(optional))  {
+        if (py.notNone(optional)) {
             self.info.optional = optional.?.isTrue();
         } else {
             self.info.optional = self.info.default_mode == .static;
@@ -100,11 +100,7 @@ pub const InstanceMember = Member("Instance", struct {
     }
 });
 
-pub const ForwardInstanceMember = Member("ForwardInstance", struct {
-
-});
-
-
+pub const ForwardInstanceMember = Member("ForwardInstance", struct {});
 
 const all_types = .{
     InstanceMember,

@@ -35,10 +35,9 @@ pub const AtomInfo = packed struct {
 // zig fmt: on
 comptime {
     if (@bitSizeOf(AtomInfo) != 64) {
-        @compileError(std.fmt.comptimePrint("AtomInfo should be 64 bits: got {}",.{@bitSizeOf(AtomInfo)}));
+        @compileError(std.fmt.comptimePrint("AtomInfo should be 64 bits: got {}", .{@bitSizeOf(AtomInfo)}));
     }
 }
-
 
 // Base Atom class
 pub const AtomBase = extern struct {
@@ -103,7 +102,6 @@ pub const AtomBase = extern struct {
         return meta.static_observers;
     }
 
-
     // Type check the given object. This assumes the module was initialized
     pub fn check(obj: *Object) bool {
         return obj.typeCheck(TypeObject.?);
@@ -135,10 +133,8 @@ pub const AtomBase = extern struct {
     }
 
     pub fn hasAnyObservers(self: *Self, topic: *Str) !bool {
-        return (
-            try self.hasStaticObservers(topic) or
-            try self.hasDynamicObservers(topic)
-        );
+        return (try self.hasStaticObservers(topic) or
+            try self.hasDynamicObservers(topic));
     }
 
     // Assumes caller has checked observer is callable or str
@@ -153,7 +149,9 @@ pub const AtomBase = extern struct {
         pool.addObserver(py.allocator, topic, observer, change_types) catch |err| {
             switch (err) {
                 error.PyError => {},
-                error.OutOfMemory => {_ = py.memoryError(); }
+                error.OutOfMemory => {
+                    _ = py.memoryError();
+                },
             }
             return error.PyError;
         };
@@ -191,10 +189,13 @@ pub const AtomBase = extern struct {
     // --------------------------------------------------------------------------
     pub fn has_observers(self: *Self, args: [*]*Object, n: isize) ?*Object {
         if (n == 0) {
-            return py.returnBool(self.info.has_observers);
+            if (self.dynamicObserverPool()) |pool| {
+                return py.returnBool(pool.map.size > 0);
+            }
+            return py.returnFalse();
         }
         if (n == 1 and Str.check(args[0])) {
-            return py.returnBool(self.hasDynamicObservers(@ptrCast(args[1])) catch return null);
+            return py.returnBool(self.hasDynamicObservers(@ptrCast(args[0])) catch return null);
         }
         return py.typeError("Invalid arguments. Signature is has_observers(topic: Optional[str] = None)", .{});
     }
@@ -312,8 +313,10 @@ pub const AtomBase = extern struct {
     pub fn clear(self: *Self) c_int {
         if (self.dynamicObserverPool()) |pool| {
             pool.clear(py.allocator) catch |err| {
-                switch(err) {
-                    error.OutOfMemory => {_ = py.memoryError();},
+                switch (err) {
+                    error.OutOfMemory => {
+                        _ = py.memoryError();
+                    },
                     //error.PyError => {},
                 }
                 return -1;
@@ -432,7 +435,7 @@ pub fn Atom(comptime slot_count: u16) type {
             // Check that alignment of base and this class's slots are correct
             // Otherwise it will start smashing stuff..
             const slot_size = @sizeOf(?*Object);
-            if (@offsetOf(AtomBase, "slots")+slot_size != @offsetOf(Self, "slots")) {
+            if (@offsetOf(AtomBase, "slots") + slot_size != @offsetOf(Self, "slots")) {
                 @compileError(std.fmt.comptimePrint("Slots of AtomBase and {} are not contiguous in memory", .{Self}));
             }
         }
@@ -473,8 +476,6 @@ pub fn Atom(comptime slot_count: u16) type {
     };
 }
 
-
-
 pub fn initModule(mod: *py.Module) !void {
     frozen_str = try py.Str.internFromString("--frozen");
     errdefer py.clear(&frozen_str);
@@ -508,4 +509,3 @@ pub fn deinitModule(mod: *py.Module) void {
     AtomBase.deinitType();
     _ = mod; // TODO: Remove dead type
 }
-

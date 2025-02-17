@@ -9,7 +9,6 @@ const MemberBase = member.MemberBase;
 const Member = member.Member;
 const InstanceMember = @import("instance.zig").InstanceMember;
 
-
 pub const TupleMember = Member("Tuple", struct {
 
     // Tuple takes an optional item and default
@@ -58,7 +57,6 @@ pub const TupleMember = Member("Tuple", struct {
         }
     }
 });
-
 
 const all_types = .{
     TupleMember,

@@ -47,7 +47,6 @@ pub const MemberInfo = packed struct {
     optional: bool,
 };
 
-
 // Base Member class
 pub const MemberBase = extern struct {
     // Reference to the type. This is set in ready
@@ -229,7 +228,7 @@ pub const MemberBase = extern struct {
                             return py.typeError("set_slot requires an int", .{});
                         }
                         const data = Int.as(@ptrCast(args[1]), usize) catch return null;
-                        const max_value = std.math.pow(usize, 2, self.info.width+1);
+                        const max_value = std.math.pow(usize, 2, self.info.width + 1);
                         if (data < 0 or data > max_value) {
                             return py.typeError("set_slot data out of range 0..{}", .{max_value});
                         }
@@ -338,14 +337,12 @@ pub const MemberBase = extern struct {
     // --------------------------------------------------------------------------
     // Helper function for validation failures
     pub fn validateFail(self: *Self, atom: *AtomBase, value: *Object, expected: [:0]const u8) py.Error!void {
-        _ = py.typeError(
-            "The '{s}' member on the '{s}' object must be of type '{s}'. Got object of type '{s}' instead",.{
-                self.name.data(),
-                atom.typeName(),
-                expected,
-                value.typeName(),
-            }
-        );
+        _ = py.typeError("The '{s}' member on the '{s}' object must be of type '{s}'. Got object of type '{s}' instead", .{
+            self.name.data(),
+            atom.typeName(),
+            expected,
+            value.typeName(),
+        });
         return error.PyError;
     }
 
@@ -384,10 +381,7 @@ pub const MemberBase = extern struct {
     }
 
     pub fn shouldNotify(self: *Self, atom: *AtomBase) bool {
-        return (
-            !atom.info.notifications_disabled
-            and atom.hasAnyObservers(self.name) catch unreachable
-        );
+        return (!atom.info.notifications_disabled and atom.hasAnyObservers(self.name) catch unreachable);
     }
     pub fn hasObserversInternal(self: *Self) bool {
         if (self.staticObservers()) |pool| {
@@ -451,7 +445,7 @@ pub const MemberBase = extern struct {
         }
         errdefer if (result.metadata) |metadata| metadata.decref();
 
-        inline for (.{"default", "validate", "coercer"}) |name| {
+        inline for (.{ "default", "validate", "coercer" }) |name| {
             const field_name = name ++ "_context";
             if (@field(self, field_name)) |context| {
                 @field(result, field_name) = context.newref();
@@ -617,7 +611,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         // Default write slot implementation. It does not need to worry about discarding the old value but must
         // return whether it stole a reference to value or borrowed it so the caller can know how to handle it.
         pub inline fn writeSlot(self: *Self, atom: *AtomBase, slot: *?*Object, value: *Object) py.Error!Ownership {
-            switch(comptime storage_mode) {
+            switch (comptime storage_mode) {
                 .pointer => {
                     slot.* = value;
                     return .stolen;
@@ -625,7 +619,6 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                 .static => {
                     if (comptime !@hasDecl(impl, "writeSlot")) {
                         @compileError("member impl must provide a writeSlot function if storage mode is static. Signature is `pub fn writeSlot(self: *MemberBase, atom: *AtomBase, value: *Object) py.Error!usize`");
-
                     }
                     const ptr: *usize = @ptrCast(slot);
                     const data_mask = self.base.slotDataMask();
@@ -639,13 +632,13 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                 .none => {
                     // unreachable;
                     return .borrowed;
-                }
+                },
             }
         }
 
         // Default delete slot implementation. It does not need to worry about discarding the old value
         pub inline fn deleteSlot(self: *Self, _: *AtomBase, slot: *?*Object) void {
-            switch(comptime storage_mode) {
+            switch (comptime storage_mode) {
                 .pointer => {
                     slot.* = null;
                 },
@@ -664,7 +657,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         // pointer storage mode must return borrowed reference
         // static storage mode always returns a new reference
         pub inline fn readSlot(self: *Self, atom: *AtomBase, slot: *?*Object) py.Error!?*Object {
-            switch(comptime storage_mode) {
+            switch (comptime storage_mode) {
                 .pointer => {
                     if (slot.*) |value| {
                         return value;
@@ -873,7 +866,7 @@ const all_modules = .{
 };
 
 const all_strings = .{
-    "undefined", "type", "object", "name", "value","oldvalue", "create", "update", "delete",
+    "undefined", "type", "object", "name", "value", "oldvalue", "create", "update", "delete",
 };
 
 pub fn initModule(mod: *py.Module) !void {
@@ -886,7 +879,7 @@ pub fn initModule(mod: *py.Module) !void {
     errdefer MemberBase.deinitType();
     try mod.addObjectRef("Member", @ptrCast(MemberBase.TypeObject.?));
 
-    inline for(all_modules) |module| {
+    inline for (all_modules) |module| {
         try module.initModule(mod);
         errdefer module.deinitModule(mod);
     }
@@ -894,10 +887,10 @@ pub fn initModule(mod: *py.Module) !void {
 
 pub fn deinitModule(mod: *py.Module) void {
     MemberBase.deinitType();
-    inline for(all_modules) |module| {
+    inline for (all_modules) |module| {
         module.deinitModule(mod);
     }
-    inline for(all_strings)|str| {
+    inline for (all_strings) |str| {
         py.clear(&@field(@This(), str ++ "_str"));
     }
 }

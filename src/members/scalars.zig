@@ -10,14 +10,12 @@ const Member = member.Member;
 var empty_str: ?*py.Str = null;
 var empty_bytes: ?*py.Bytes = null;
 
-
 // Does no validation at all
 pub const ValueMember = Member("Value", struct {
     pub inline fn initDefault() !?*Object {
         return py.returnNone();
     }
 });
-
 
 pub const CallableMember = Member("Callable", struct {
     pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
@@ -27,12 +25,11 @@ pub const CallableMember = Member("Callable", struct {
     }
 });
 
-
 pub const BoolMember = Member("Bool", struct {
     pub const storage_mode: StorageMode = .static;
     pub const default_bitsize = 1;
 
-    pub inline fn initDefault() !?*Object{
+    pub inline fn initDefault() !?*Object {
         return py.returnFalse();
     }
 
@@ -55,10 +52,8 @@ pub const BoolMember = Member("Bool", struct {
     }
 });
 
-
-
 pub const IntMember = Member("Int", struct {
-    pub inline fn initDefault() !?*Object{
+    pub inline fn initDefault() !?*Object {
         return @ptrCast(try py.Int.new(0));
     }
     pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
@@ -68,10 +63,8 @@ pub const IntMember = Member("Int", struct {
     }
 });
 
-
-
 pub const FloatMember = Member("Float", struct {
-    pub inline fn initDefault() !?*Object{
+    pub inline fn initDefault() !?*Object {
         return @ptrCast(try py.Float.new(0.0));
     }
     pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
@@ -80,7 +73,6 @@ pub const FloatMember = Member("Float", struct {
         }
     }
 });
-
 
 pub const StrMember = Member("Str", struct {
     pub inline fn initDefault() !?*Object {
@@ -93,7 +85,6 @@ pub const StrMember = Member("Str", struct {
         }
     }
 });
-
 
 pub const BytesMember = Member("Bytes", struct {
     pub inline fn initDefault() !?*Object {

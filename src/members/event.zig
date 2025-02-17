@@ -20,7 +20,6 @@ var name_str: ?*Str = null;
 var object_str: ?*Str = null;
 var value_str: ?*Str = null;
 
-
 pub const EventBinder = extern struct {
     const Self = @This();
     // Reference to the type. This is set in ready
@@ -40,7 +39,7 @@ pub const EventBinder = extern struct {
     pub fn new(cls: *Type, args: *Tuple, _: ?*Dict) ?*Self {
         var _member: *EventMember = undefined;
         var _atom: *AtomBase = undefined;
-        args.parseTyped(.{&_member, &_atom}) catch return null;
+        args.parseTyped(.{ &_member, &_atom }) catch return null;
         const self: *Self = @ptrCast(cls.genericNew(null, null) catch return null);
         self.member = _member.newref();
         self.atom = _atom.newref();
@@ -56,7 +55,7 @@ pub const EventBinder = extern struct {
             return py.typeError("An event can be triggered with at most 1 argument", .{});
         }
         const value = if (n == 0) py.None() else args.getUnsafe(0).?;
-        EventMember.Impl.setattr( @ptrCast(self.member), self.atom, value ) catch return null;
+        EventMember.Impl.setattr(@ptrCast(self.member), self.atom, value) catch return null;
         return py.returnNone();
     }
 
@@ -83,10 +82,7 @@ pub const EventBinder = extern struct {
             if (!other.typeCheckSelf()) {
                 return py.returnFalse(); // Not the assumed type
             }
-            return py.returnBool(
-                self.member == other.member
-                and self.atom == other.atom
-            );
+            return py.returnBool(self.member == other.member and self.atom == other.atom);
         }
         return py.returnNotImplemented();
     }
@@ -101,12 +97,12 @@ pub const EventBinder = extern struct {
     }
 
     pub fn clear(self: *Self) c_int {
-        py.clearAll(.{&self.atom, &self.member});
+        py.clearAll(.{ &self.atom, &self.member });
         return 0;
     }
 
     pub fn traverse(self: *Self, visit: py.visitproc, arg: ?*anyopaque) c_int {
-        return py.visitAll(.{self.atom, self.member}, visit, arg);
+        return py.visitAll(.{ self.atom, self.member }, visit, arg);
     }
 
     const methods = [_]py.MethodDef{
@@ -144,7 +140,7 @@ pub const EventBinder = extern struct {
 };
 
 // The Event member takes no storage
-pub const EventMember = Member("Event", struct{
+pub const EventMember = Member("Event", struct {
     // Event takes no storage slot
     pub const storage_mode: StorageMode = .none;
 
@@ -153,7 +149,7 @@ pub const EventMember = Member("Event", struct{
     pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
         const kwlist = [_:null][*c]const u8{"kind"};
         var kind: ?*Object = null;
-        try py.parseTupleAndKeywords(args, kwargs, "|O", @ptrCast(&kwlist), .{ &kind });
+        try py.parseTupleAndKeywords(args, kwargs, "|O", @ptrCast(&kwlist), .{&kind});
         if (kind) |v| {
             // Let InstanceMember figure out if kind is valid
             self.validate_context = try InstanceMember.TypeObject.?.callArgs(.{v});
@@ -161,7 +157,7 @@ pub const EventMember = Member("Event", struct{
     }
 
     pub fn getattr(self: *MemberBase, atom: *AtomBase) !*Object {
-        return @ptrCast(try EventBinder.TypeObject.?.callArgs(.{self, atom}));
+        return @ptrCast(try EventBinder.TypeObject.?.callArgs(.{ self, atom }));
     }
 
     pub fn validate(self: *MemberBase, atom: *AtomBase, oldvalue: *Object, value: *Object) py.Error!void {
@@ -190,12 +186,11 @@ pub const EventMember = Member("Event", struct{
         _ = py.typeError("cannot delete the value of an event", .{});
         return error.PyError;
     }
-
 });
 
 pub fn initModule(mod: *py.Module) !void {
     // Strings used to create the event dict
-    inline for (.{"type", "event", "object", "name", "value"}) |str| {
+    inline for (.{ "type", "event", "object", "name", "value" }) |str| {
         @field(@This(), str ++ "_str") = try Str.internFromString(str);
         errdefer py.clear(@field(@This(), str ++ "_str"));
     }
@@ -212,5 +207,5 @@ pub fn deinitModule(mod: *py.Module) void {
     _ = mod;
     EventBinder.deinitType();
     EventMember.deinitType();
-    py.clearAll(.{&event_str, &type_str, &name_str, &object_str, &value_str});
+    py.clearAll(.{ &event_str, &type_str, &name_str, &object_str, &value_str });
 }

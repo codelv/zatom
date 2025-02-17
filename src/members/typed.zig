@@ -77,7 +77,7 @@ pub const TypedMember = Member("Typed", struct {
 
         // If a factory or init args were provided set to to not optional
         // Unless explicitly defined as optional or not
-        if (py.notNone(optional))  {
+        if (py.notNone(optional)) {
             self.info.optional = optional.?.isTrue();
         } else {
             self.info.optional = self.info.default_mode == .static;
@@ -95,11 +95,7 @@ pub const TypedMember = Member("Typed", struct {
     }
 });
 
-pub const ForwardTypedMember = Member("ForwardTyped", struct {
-
-});
-
-
+pub const ForwardTypedMember = Member("ForwardTyped", struct {});
 
 const all_types = .{
     TypedMember,
@@ -126,4 +122,3 @@ pub fn deinitModule(mod: *py.Module) void {
     }
     py.clear(&partial);
 }
-
