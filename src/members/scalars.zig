@@ -29,7 +29,8 @@ pub const CallableMember = Member("Callable", struct {
 
 
 pub const BoolMember = Member("Bool", struct {
-    pub const storage_mode: StorageMode = .bit;
+    pub const storage_mode: StorageMode = .static;
+    pub const default_bitsize = 1;
 
     pub inline fn initDefault() !?*Object{
         return py.returnFalse();
@@ -39,27 +40,12 @@ pub const BoolMember = Member("Bool", struct {
         std.debug.assert(@sizeOf(*usize) == @sizeOf(*Object));
     }
 
-    pub inline fn writeSlot(self: *MemberBase, _: *AtomBase, slot: *?*Object, value: *Object) py.Error!member.Ownership {
-        const mask = @as(usize, 1) << self.info.bit;
-        const ptr: *usize = @ptrCast(slot);
-        if (value == py.True()) {
-            ptr.* |= mask;
-        } else {
-            ptr.* &= ~mask;
-        }
-        return .borrowed;
+    pub inline fn writeSlot(_: *MemberBase, _: *AtomBase, value: *Object) py.Error!usize {
+        return @intFromBool(value == py.True());
     }
 
-    pub inline fn deleteSlot(self: *MemberBase, _: *AtomBase, slot: *?*Object) void {
-        const ptr: *usize = @ptrCast(slot);
-        const mask = @as(usize, 1) << self.info.bit;
-        ptr.* &= ~mask;
-    }
-
-    pub inline fn readSlot(self: *MemberBase, _: *AtomBase, slot: *?*Object) py.Error!?*Object {
-        const ptr: *usize = @ptrCast(slot);
-        const mask = @as(usize, 1) << self.info.bit;
-        return py.returnBool(ptr.* & mask != 0);
+    pub inline fn readSlot(_: *MemberBase, _: *AtomBase, data: usize) py.Error!?*Object {
+        return py.returnBool(data != 0);
     }
 
     pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {

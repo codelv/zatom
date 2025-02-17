@@ -65,7 +65,7 @@ pub const InstanceMember = Member("Instance", struct {
                         return error.PyError;
                     }
                 }
-                break :blk try Tuple.pack(.{cls.newref()});
+                break :blk try Tuple.packNewrefs(.{cls});
             };
             defer partial_args.decref();
             self.default_context = try partial.?.call(partial_args, partial_kwargs);

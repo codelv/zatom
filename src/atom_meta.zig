@@ -11,7 +11,9 @@ const Tuple = py.Tuple;
 const atom = @import("atom.zig");
 const AtomBase = atom.AtomBase;
 const MemberBase = @import("member.zig").MemberBase;
-const PoolManager = @import("observer_pool.zig").PoolManager;
+const observer_pool = @import("observer_pool.zig");
+const PoolManager = observer_pool.PoolManager;
+const ObserverPool = observer_pool.ObserverPool;
 
 // This is set at startup
 var atom_members_str: ?*Str = null;
@@ -29,6 +31,7 @@ pub const AtomMeta = extern struct {
     base: BaseType,
     atom_members: ?*Dict = null,
     pool_manager: ?*PoolManager = null,
+    static_observers: ?*ObserverPool = null,
     slot_count: u16 = 0,
 
     // Import the object protocol
@@ -96,7 +99,7 @@ pub const AtomMeta = extern struct {
             // Add __slots__ if not defined
             var slots =
                 if (enable_weakrefs)
-                Tuple.newFromArgs(.{weakref_str.?.newref()}) catch return null
+                Tuple.packNewrefs(.{weakref_str.?}) catch return null
             else
                 Tuple.new(0) catch return null;
             defer slots.decref();
@@ -110,41 +113,40 @@ pub const AtomMeta = extern struct {
         defer members.decref();
         var pos: isize = 0;
         var slot_count: usize = 0;
-        var last_bool_slot: ?usize = null;
-        const max_bits = @sizeOf(isize);
-        var bit_count: u5 = 0;
+        var last_static_slot: ?usize = null;
+        const max_bits: usize = @bitSizeOf(usize);
+        var slot_offset: usize = 0;
         while (dict.next(&pos)) |entry| {
             if (MemberBase.check(entry.value) and Str.check(entry.key)) {
                 // TODO: Clone if a this is a base class member
                 const member: *MemberBase = @ptrCast(entry.value);
                 member.name = @ptrCast(entry.key);
                 switch (member.info.storage_mode) {
-                    .slot => {
+                    .pointer => {
                         member.info.index = @intCast(slot_count);
                         slot_count += 1;
                     },
-                    .bit => {
-                        if (last_bool_slot) |slot| {
-                            // Reuse the last open bit of the last bool's slot
-                            member.info.index = @intCast(slot);
-                            member.info.bit = bit_count;
+                    .static => {
+                        // Check if there is room in the last spot;
+                        const space_remaining = max_bits -| slot_offset;
+                        // The reason we add 2 is because we have to reservere 1
+                        // extra bit to account for a "null" in order to
+                        // preserve the `default` behavior
+                        const bitsize = @as(usize, member.info.width) + 2;
+                        const can_fit = bitsize < space_remaining;
 
-                            if (bit_count == max_bits - 1) {
-                                // If we reached the last bit in the last slot
-                                // clear the last slot, the next member needs to
-                                // allocate another slot
-                                last_bool_slot = null; // Clear
-                                bit_count = 0; // Reset
-                            } else {
-                                bit_count += 1;
-                            }
-                        } else {
-                            // Start a new packed bool slot
+                        if (last_static_slot == null or !can_fit) {
+                            // Start a new static slot
                             member.info.index = @intCast(slot_count);
-                            last_bool_slot = slot_count;
-                            member.info.bit = 0;
-                            bit_count = 1; // Reset bit count
+                            last_static_slot = slot_count;
+                            member.info.offset = 0;
+                            slot_offset = bitsize; // Reset slot offset
                             slot_count += 1; // This consumes a slot
+                        } else {
+                            // Reuse the space from the last static slot
+                            member.info.index = @intCast(last_static_slot.?);
+                            member.info.offset = @intCast(slot_offset);
+                            slot_offset += bitsize;
                         }
                     },
                     .none => {}, // No-op
@@ -173,7 +175,7 @@ pub const AtomMeta = extern struct {
             const slot_base = atom.atom_types[slot_count].?;
             if (num_bases == 1) {
                 // Add the approprate base
-                bases = Tuple.newFromArgs(.{slot_base.newref()}) catch return null;
+                bases = Tuple.packNewrefs(.{slot_base}) catch return null;
                 owns_bases = true;
             } else {
                 bases = Tuple.copy(bases) catch return null;
@@ -210,12 +212,18 @@ pub const AtomMeta = extern struct {
         const count = self.validate_atom_members(members) catch return -1;
         py.setref(@ptrCast(&self.atom_members), @ptrCast(members.newref()));
         self.slot_count = count;
+        var pos: isize = 0;
+        while (members.next(&pos)) |entry| {
+            // Assign the owner
+            const member: *MemberBase = @ptrCast(entry.value);
+            member.owner = self;
+        }
         return 0;
     }
 
     pub fn get_member(self: *Self, name: *Object) ?*Object {
         if (!Str.check(name)) {
-            return py.typeError("member name must be a string", .{});
+            return py.typeError("Invalid arguments: Signature is get_member(name: str)", .{});
         }
         if (self.atom_members) |members| {
             return members.getItemUnchecked(name);

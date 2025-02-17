@@ -67,7 +67,7 @@ pub const TypedMember = Member("Typed", struct {
                         return error.PyError;
                     }
                 }
-                break :blk try Tuple.pack(.{kind.newref()});
+                break :blk try Tuple.packNewrefs(.{kind});
             };
             defer partial_args.decref();
             self.default_context = try partial.?.call(partial_args, partial_kwargs);

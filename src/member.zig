@@ -9,20 +9,28 @@ const Dict = py.Dict;
 const Tuple = py.Tuple;
 
 // Thes strings are set at startup
-var default_name_str: ?*Str = null;
-
+var undefined_str: ?*Str = null;
+var type_str: ?*Str = null;
+var create_str: ?*Str = null;
+var update_str: ?*Str = null;
+var delete_str: ?*Str = null;
+var name_str: ?*Str = null;
+var object_str: ?*Str = null;
+var value_str: ?*Str = null;
+var oldvalue_str: ?*Str = null;
 
 const AtomBase = @import("atom.zig").AtomBase;
-const MemberObservers = @import("observer_pool.zig").MemberObservers;
+const AtomMeta = @import("atom_meta.zig").AtomMeta;
+const ObserverPool = @import("observer_pool.zig").ObserverPool;
+const ChangeType = @import("observer_pool.zig").ChangeType;
 const package_name = @import("api.zig").package_name;
-const scalars = @import("members/scalars.zig");
-const event = @import("members/event.zig");
-const instance = @import("members/instance.zig");
-const typed = @import("members/typed.zig");
+
+const MAX_BITSIZE = @bitSizeOf(usize);
+const MAX_OFFSET = @bitSizeOf(usize) - 1;
 
 pub const StorageMode = enum(u2) {
-    slot = 0, // Takes a full slot
-    bit = 1, // Takes a single bit of a slot
+    pointer = 0, // Object pointer
+    static = 1, // Takes a fixed width of a slot
     none = 2, // Does not require any storage
 };
 
@@ -31,21 +39,13 @@ pub const DefaultMode = enum(u1) { static = 0, call = 1 };
 
 pub const MemberInfo = packed struct {
     index: u16,
-    bit: u5, // bool bitfield
+    width: u6, // bit size -1. A value of 0 means 1 one bit
+    offset: u6, // starting bit position in slot
     storage_mode: StorageMode,
     default_mode: DefaultMode,
     // It is up to the member whether these is used or not
     optional: bool,
-    reserved: u7, // Adjust this to so @sizeOf(MemberInfo) == 32 bits
 };
-
-
-comptime {
-    if (@bitSizeOf(MemberInfo) != 32) {
-        @compileError(std.fmt.comptimePrint("MemberInfo should be 32 bits: got {}",.{@bitSizeOf(MemberInfo)}));
-    }
-}
-
 
 
 // Base Member class
@@ -56,13 +56,13 @@ pub const MemberBase = extern struct {
     const Self = @This();
 
     base: BaseType,
-    // TODO: Observers
-    observers: ?*MemberObservers = null,
     metadata: ?*Dict = null,
     default_context: ?*Object = null,
     validate_context: ?*Object = null,
     coercer_context: ?*Object = null,
     name: *Str = undefined,
+    // The class to which this member is bound
+    owner: ?*AtomMeta = null,
     info: MemberInfo,
 
     // Import the object protocol
@@ -75,7 +75,7 @@ pub const MemberBase = extern struct {
 
     pub fn new(cls: *Type, args: *Tuple, kwargs: ?*Dict) ?*Self {
         const self: *Self = @ptrCast(cls.genericNew(args, kwargs) catch return null);
-        self.name = default_name_str.?.newref();
+        self.name = undefined_str.?.newref();
         return self;
     }
 
@@ -114,21 +114,55 @@ pub const MemberBase = extern struct {
         return -1;
     }
 
-    pub fn get_bit(self: *Self) ?*Int {
-        return Int.fromNumberUnchecked(self.info.bit);
+    pub fn get_bitsize(self: *Self) ?*Int {
+        return Int.fromNumberUnchecked(@as(usize, self.info.width) + 1);
     }
 
-    pub fn set_bit(self: *Self, value: ?*Object, _: ?*anyopaque) c_int {
+    pub fn set_bitsize(self: *Self, value: ?*Object, _: ?*anyopaque) c_int {
         if (value) |v| {
             if (!Int.check(v)) {
-                _ = py.typeError("Member bit must be an int", .{});
+                _ = py.typeError("Member bitsize must be an int", .{});
                 return -1;
             }
-            self.info.bit = Int.as(@ptrCast(v), u5) catch return -1;
+            const n = Int.as(@ptrCast(v), usize) catch return -1;
+            if (n == 0 or n > MAX_BITSIZE) {
+                _ = py.typeError("Member bitsize must be between 1 and {}", .{MAX_BITSIZE});
+                return -1;
+            }
+            self.info.width = @intCast(n - 1);
             return 0;
         }
-        _ = py.typeError("Member bit cannot be deleted", .{});
+        _ = py.typeError("Member bitsize cannot be deleted", .{});
         return -1;
+    }
+
+    pub fn get_offset(self: *Self) ?*Int {
+        return Int.fromNumberUnchecked(self.info.offset);
+    }
+
+    pub fn set_offset(self: *Self, value: ?*Object, _: ?*anyopaque) c_int {
+        if (value) |v| {
+            if (!Int.check(v)) {
+                _ = py.typeError("Member offset must be an int", .{});
+                return -1;
+            }
+            const n = Int.as(@ptrCast(v), usize) catch return -1;
+            if (n > MAX_OFFSET) {
+                _ = py.typeError("Member offset must be between 0 and {}", .{MAX_OFFSET});
+                return -1;
+            }
+            self.info.offset = @intCast(n);
+            return 0;
+        }
+        _ = py.typeError("Member offset cannot be deleted", .{});
+        return -1;
+    }
+
+    pub fn get_owner(self: *Self) ?*Object {
+        if (self.owner) |owner| {
+            return @ptrCast(owner.newref());
+        }
+        return null;
     }
 
     pub fn get_metadata(self: *Self) ?*Object {
@@ -154,12 +188,23 @@ pub const MemberBase = extern struct {
     // Methods
     // --------------------------------------------------------------------------
     pub fn get_slot(self: *Self, atom: *AtomBase) ?*Object {
-        if (self.info.storage_mode == .slot) {
+        if (self.info.storage_mode != .none) {
             if (!atom.typeCheckSelf()) {
                 return py.typeError("Atom", .{});
             }
             if (atom.slotPtr(self.info.index)) |ptr| {
-                return ptr.*;
+                switch (self.info.storage_mode) {
+                    .pointer => return ptr.*,
+                    .static => {
+                        const data_ptr: *usize = @ptrCast(ptr);
+                        if (data_ptr.* & self.slotSetMask() != 0) {
+                            const data = (data_ptr.* & self.slotDataMask()) >> self.info.offset;
+                            return @ptrCast(Int.new(data) catch null);
+                        }
+                        return py.returnNone();
+                    },
+                    .none => unreachable,
+                }
             }
         }
         return py.attributeError("Member has no slot", .{});
@@ -169,13 +214,33 @@ pub const MemberBase = extern struct {
         if (n != 2) {
             return py.attributeError("set_slot takes 2 arguments", .{});
         }
-        if (self.info.storage_mode == .slot) {
+        if (self.info.storage_mode != .none) {
             const atom: *AtomBase = @ptrCast(args[0]);
             if (!atom.typeCheckSelf()) {
                 return py.typeError("Atom", .{});
             }
             if (atom.slotPtr(self.info.index)) |ptr| {
-                ptr.* = args[1];
+                switch (self.info.storage_mode) {
+                    .pointer => {
+                        ptr.* = args[1];
+                    },
+                    .static => {
+                        if (!Int.check(args[1])) {
+                            return py.typeError("set_slot requires an int", .{});
+                        }
+                        const data = Int.as(@ptrCast(args[1]), usize) catch return null;
+                        const max_value = std.math.pow(usize, 2, self.info.width+1);
+                        if (data < 0 or data > max_value) {
+                            return py.typeError("set_slot data out of range 0..{}", .{max_value});
+                        }
+                        const data_ptr: *usize = @ptrCast(ptr);
+                        const data_mask = self.slotDataMask();
+                        const set_mask = self.slotSetMask();
+                        const new_data = data_mask & (data << self.info.offset);
+                        data_ptr.* = (data_ptr.* & ~data_mask) | new_data | set_mask;
+                    },
+                    .none => unreachable,
+                }
                 return py.returnNone();
             }
         }
@@ -183,12 +248,21 @@ pub const MemberBase = extern struct {
     }
 
     pub fn del_slot(self: *Self, atom: *AtomBase) ?*Object {
-        if (self.info.storage_mode == .slot) {
+        if (self.info.storage_mode != .none) {
             if (!atom.typeCheckSelf()) {
                 return py.typeError("Atom", .{});
             }
             if (atom.slotPtr(self.info.index)) |ptr| {
-                ptr.* = null;
+                switch (self.info.storage_mode) {
+                    .pointer => {
+                        ptr.* = null;
+                    },
+                    .static => {
+                        const data_ptr: *usize = @ptrCast(ptr);
+                        data_ptr.* &= ~self.slotSetMask();
+                    },
+                    .none => unreachable,
+                }
                 return py.returnNone();
             }
         }
@@ -196,7 +270,10 @@ pub const MemberBase = extern struct {
     }
 
     pub fn has_observers(self: *Self) ?*Object {
-        return py.returnBool(self.hasObserversInternal());
+        if (self.staticObservers()) |pool| {
+            return py.returnBool(pool.hasTopic(self.name) catch return null);
+        }
+        return py.returnFalse();
     }
 
     pub fn has_observer(self: *Self, args: [*]*Object, n: isize) ?*Object {
@@ -210,20 +287,18 @@ pub const MemberBase = extern struct {
             }
             change_types = Int.as(@ptrCast(args[1]), u8) catch return null;
         }
-        if (self.observers) |pool| {
-            return py.returnBool(pool.has_observer(args[0], change_types) catch return null);
+        if (self.staticObservers()) |pool| {
+            return py.returnBool(pool.hasObserver(self.name, args[0], change_types) catch return null);
         }
         return py.returnFalse();
     }
 
-
     pub fn remove_static_observer(self: *Self, observer: *Object) ?*Object {
-        if (self.observers) |pool| {
-            pool.remove_observer(observer) catch return null;
+        if (self.staticObservers()) |pool| {
+            pool.removeObserver(self.name, observer) catch return null;
         }
         return py.returnNone();
     }
-
 
     pub fn clone(self: *Self) ?*Object {
         return self.cloneInternal() catch return null;
@@ -238,9 +313,8 @@ pub const MemberBase = extern struct {
         if (!atom.typeCheckSelf()) {
             return py.typeError("notify() 1st argument must be an Atom instance", .{});
         }
-        const newargs = args.slice(1, n-1) catch return null;
-        defer newargs.decref();
-        self.notifyInternal(atom, newargs, kwargs, 0xFF) catch return null;
+        const new_args = args.slice(1, n) catch return null;
+        atom.notifyInternal(self.name, new_args, kwargs, @intFromEnum(ChangeType.any)) catch return null;
         return py.returnNone();
     }
 
@@ -302,65 +376,67 @@ pub const MemberBase = extern struct {
         }
     }
 
+    pub fn staticObservers(self: *Self) ?*ObserverPool {
+        if (self.owner) |owner| {
+            return owner.static_observers;
+        }
+        return null;
+    }
+
     pub fn shouldNotify(self: *Self, atom: *AtomBase) bool {
-        // TODO: normal atom seems to ignore the disabled flag
         return (
             !atom.info.notifications_disabled
-            and (
-                self.hasObserversInternal()
-                or atom.hasObservers(self.name) catch unreachable
-            )
+            and atom.hasAnyObservers(self.name) catch unreachable
         );
     }
     pub fn hasObserversInternal(self: *Self) bool {
-        if (self.observers) |pool| {
-            return pool.count() > 0;
+        if (self.staticObservers()) |pool| {
+            return pool.hasTopic(self.name) catch unreachable;
         }
         return false;
     }
 
-    pub fn notifyInternal(self: *Self, atom: *AtomBase, args: *Tuple, kwargs: ?*Dict, change_types: u8) py.Error!void {
-        if (self.observers) |observers| {
-            observers.notify(atom, args, kwargs, change_types) catch |err| {
-                switch(err) {
-                    error.PyError => {},
-                    error.OutOfMemory => {_ = py.memoryError();}
-                }
-                return error.PyError;
-            };
-        }
-    }
-
-    // Generic notify
-    pub fn notifyChange(self: *Self, atom: *AtomBase, change: *Dict) !void {
-        _ = self;
-        _ = atom;
-        _ = change;
+    pub fn notifyChange(self: *Self, atom: *AtomBase, change: *Dict, change_type: ChangeType) !void {
+        const args = try Tuple.packNewrefs(.{change});
+        defer args.decref();
+        try atom.notifyInternal(self.name, args, null, @intFromEnum(change_type));
     }
 
     pub fn notifyCreate(self: *Self, atom: *AtomBase, newvalue: *Object) !void {
-        if (!self.shouldNotify(atom)) {
-            return; // Nobody is listening
+        if (self.shouldNotify(atom)) {
+            var change: *Dict = try Dict.new();
+            defer change.decref();
+            try change.set(@ptrCast(type_str.?), @ptrCast(create_str.?));
+            try change.set(@ptrCast(object_str.?), @ptrCast(atom));
+            try change.set(@ptrCast(name_str.?), @ptrCast(self.name));
+            try change.set(@ptrCast(value_str.?), newvalue);
+            return self.notifyChange(atom, change, .create);
         }
-        _ = newvalue;
-        // TODO: Implement
     }
 
     pub fn notifyUpdate(self: *Self, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) !void {
-        if (!self.shouldNotify(atom)) {
-            return; // Nobody is listening
+        if (oldvalue != newvalue and self.shouldNotify(atom)) {
+            var change: *Dict = try Dict.new();
+            defer change.decref();
+            try change.set(@ptrCast(type_str.?), @ptrCast(update_str.?));
+            try change.set(@ptrCast(object_str.?), @ptrCast(atom));
+            try change.set(@ptrCast(name_str.?), @ptrCast(self.name));
+            try change.set(@ptrCast(oldvalue_str.?), oldvalue);
+            try change.set(@ptrCast(value_str.?), newvalue);
+            return self.notifyChange(atom, change, .update);
         }
-        _ = oldvalue;
-        _ = newvalue;
-        // TODO: Implement
     }
 
     pub fn notifyDelete(self: *Self, atom: *AtomBase, oldvalue: *Object) !void {
-        if (!self.shouldNotify(atom)) {
-            return; // Nobody is listening
+        if (self.shouldNotify(atom)) {
+            var change: *Dict = try Dict.new();
+            defer change.decref();
+            try change.set(@ptrCast(type_str.?), @ptrCast(delete_str.?));
+            try change.set(@ptrCast(object_str.?), @ptrCast(atom));
+            try change.set(@ptrCast(name_str.?), @ptrCast(self.name));
+            try change.set(@ptrCast(value_str.?), oldvalue);
+            return self.notifyChange(atom, change, .delete);
         }
-        _ = oldvalue;
-        // TODO: Implement
     }
 
     pub fn cloneInternal(self: *Self) !*Object {
@@ -385,6 +461,17 @@ pub const MemberBase = extern struct {
         return @ptrCast(result);
     }
 
+    // Mask for slot's data bits
+    pub inline fn slotDataMask(self: *Self) usize {
+        return (@as(usize, self.info.width) + 1) << self.info.offset;
+    }
+
+    // Mask for slot's 'is set' bit
+    pub inline fn slotSetMask(self: *Self) usize {
+        const pos: u6 = self.info.offset + self.info.width + 1;
+        return @as(usize, @as(usize, 1) << pos);
+    }
+
     // --------------------------------------------------------------------------
     // Type def
     // --------------------------------------------------------------------------
@@ -407,7 +494,7 @@ pub const MemberBase = extern struct {
 
     // AtomBase uses this to selectively clear slots
     pub fn clearSlot(self: *Self, atom: *AtomBase) void {
-        if (self.info.storage_mode == .slot) {
+        if (self.info.storage_mode == .pointer) {
             if (atom.slotPtr(self.info.index)) |ptr| {
                 py.clear(ptr);
             }
@@ -416,7 +503,7 @@ pub const MemberBase = extern struct {
 
     // AtomBase uses this to selectively visit slots
     pub fn visitSlot(self: *Self, atom: *AtomBase, visit: py.visitproc, arg: ?*anyopaque) c_int {
-        if (self.info.storage_mode == .slot) {
+        if (self.info.storage_mode == .pointer) {
             if (atom.slotPtr(self.info.index)) |ptr| {
                 return py.visit(ptr.*, visit, arg);
             }
@@ -438,7 +525,8 @@ pub const MemberBase = extern struct {
     const getset = [_]py.GetSetDef{
         .{ .name = "name", .get = @ptrCast(&get_name), .set = @ptrCast(&set_name), .doc = "Get and set the name to which the member is bound." },
         .{ .name = "index", .get = @ptrCast(&get_index), .set = @ptrCast(&set_index), .doc = "Get the index to which the member is bound." },
-        .{ .name = "bit", .get = @ptrCast(&get_bit), .set = @ptrCast(&set_bit), .doc = "Get the index to which the member is bound." },
+        .{ .name = "bitsize", .get = @ptrCast(&get_bitsize), .set = @ptrCast(&set_bitsize), .doc = "Get the bitsize of the member." },
+        .{ .name = "offset", .get = @ptrCast(&get_offset), .set = @ptrCast(&set_offset), .doc = "Get the bitsize of the member." },
         .{ .name = "metadata", .get = @ptrCast(&get_metadata), .set = @ptrCast(&set_metadata), .doc = "Get and set the member metadata" },
         .{}, // sentinel
     };
@@ -447,6 +535,7 @@ pub const MemberBase = extern struct {
         .{ .ml_name = "get_slot", .ml_meth = @constCast(@ptrCast(&get_slot)), .ml_flags = py.c.METH_O, .ml_doc = "Get slot value directly" },
         .{ .ml_name = "set_slot", .ml_meth = @constCast(@ptrCast(&set_slot)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Set slot value directly" },
         .{ .ml_name = "del_slot", .ml_meth = @constCast(@ptrCast(&del_slot)), .ml_flags = py.c.METH_O, .ml_doc = "Del slot value directly" },
+        .{ .ml_name = "notify", .ml_meth = @constCast(@ptrCast(&notify)), .ml_flags = py.c.METH_VARARGS | py.c.METH_KEYWORDS, .ml_doc = "Notify the observers for the given member and atom." },
         .{ .ml_name = "tag", .ml_meth = @constCast(@ptrCast(&tag)), .ml_flags = py.c.METH_VARARGS | py.c.METH_KEYWORDS, .ml_doc = "Tag the member with metadata" },
         .{ .ml_name = "clone", .ml_meth = @constCast(@ptrCast(&clone)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Clone the member" },
         .{}, // sentinel
@@ -487,6 +576,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         pub const BaseType = MemberBase;
         pub const TypeName = type_name;
         pub const Impl = impl;
+        pub const storage_mode: StorageMode = if (@hasDecl(impl, "storage_mode")) impl.storage_mode else .pointer;
         const Self = @This();
 
         base: BaseType,
@@ -526,31 +616,73 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
 
         // Default write slot implementation. It does not need to worry about discarding the old value but must
         // return whether it stole a reference to value or borrowed it so the caller can know how to handle it.
-        pub inline fn writeSlot(self: *MemberBase, atom: *AtomBase, slot: *?*Object, value: *Object) py.Error!Ownership {
-            if (comptime @hasDecl(impl, "writeSlot")) {
-                return try impl.writeSlot(self, atom, slot, value);
-            } else {
-                slot.* = value;
-                return .stolen;
+        pub inline fn writeSlot(self: *Self, atom: *AtomBase, slot: *?*Object, value: *Object) py.Error!Ownership {
+            switch(comptime storage_mode) {
+                .pointer => {
+                    slot.* = value;
+                    return .stolen;
+                },
+                .static => {
+                    if (comptime !@hasDecl(impl, "writeSlot")) {
+                        @compileError("member impl must provide a writeSlot function if storage mode is static. Signature is `pub fn writeSlot(self: *MemberBase, atom: *AtomBase, value: *Object) py.Error!usize`");
+
+                    }
+                    const ptr: *usize = @ptrCast(slot);
+                    const data_mask = self.base.slotDataMask();
+                    const set_mask = self.base.slotSetMask();
+                    const data = try impl.writeSlot(@ptrCast(self), atom, value);
+                    const new_value = data_mask & (data << self.base.info.offset);
+                    // Mark the slot as set with the new data
+                    ptr.* = (ptr.* & ~data_mask) | new_value | set_mask;
+                    return .borrowed;
+                },
+                .none => {
+                    // unreachable;
+                    return .borrowed;
+                }
             }
         }
 
         // Default delete slot implementation. It does not need to worry about discarding the old value
-        pub inline fn deleteSlot(self: *MemberBase, atom: *AtomBase, slot: *?*Object) void {
-            if (comptime @hasDecl(impl, "deleteSlot")) {
-                impl.deleteSlot(self, atom, slot);
-            } else {
-                slot.* = null;
+        pub inline fn deleteSlot(self: *Self, _: *AtomBase, slot: *?*Object) void {
+            switch(comptime storage_mode) {
+                .pointer => {
+                    slot.* = null;
+                },
+                .static => {
+                    // Clear the slot 'is set' bit
+                    // This makes the code treat it as "null"
+                    const ptr: *usize = @ptrCast(slot);
+                    const mask = self.base.slotSetMask();
+                    ptr.* &= ~mask;
+                },
+                .none => {},
             }
         }
 
-        // Default read slot implementation. Must return a new reference
-        pub inline fn readSlot(self: *MemberBase, atom: *AtomBase, slot: *?*Object) py.Error!?*Object {
-            if (comptime @hasDecl(impl, "readSlot")) {
-                return impl.readSlot(self, atom, slot);
-            }
-            if (slot.*) |value| {
-                return value.newref();
+        // Default read slot implementation.
+        // pointer storage mode must return borrowed reference
+        // static storage mode always returns a new reference
+        pub inline fn readSlot(self: *Self, atom: *AtomBase, slot: *?*Object) py.Error!?*Object {
+            switch(comptime storage_mode) {
+                .pointer => {
+                    if (slot.*) |value| {
+                        return value;
+                    }
+                },
+                .static => {
+                    if (comptime !@hasDecl(impl, "readSlot")) {
+                        @compileError("member impl must provide a readSlot if storage mode is static. Signature is `pub fn readSlot(self: *MemberBase, atom: *AtomBase, data: usize) py.Error!?*Object`");
+                    }
+                    const ptr: *usize = @ptrCast(slot);
+                    const value = ptr.*;
+                    if (value & self.base.slotSetMask() != 0) {
+                        // Extract only the data allocated for this slot
+                        const data = (value & self.base.slotDataMask()) >> self.base.info.offset;
+                        return impl.readSlot(@ptrCast(self), atom, data);
+                    }
+                },
+                .none => {},
             }
             return null;
         }
@@ -559,12 +691,13 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         // Returns new reference
         pub fn getattr(self: *Self, atom: *AtomBase) !*Object {
             if (atom.slotPtr(self.base.info.index)) |ptr| {
-                // TODO: This will never call notifyCreate for the Bool member
                 if (try readSlot(@ptrCast(self), atom, ptr)) |v| {
-                    return v;
+                    if (comptime storage_mode == .pointer) {
+                        return v.newref();
+                    } else {
+                        return v;
+                    }
                 }
-                const old = py.None();
-                defer old.decref(); // TODO: None does not need decref on 3.12+
                 const default_handler = comptime if (@hasDecl(impl, "default")) impl.default else Self.default;
                 const value = try default_handler(@ptrCast(self), atom);
 
@@ -573,7 +706,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                 // of the value then we do not need to decref it. If an error occurs it gets decref'd
                 var value_ownership: Ownership = .borrowed;
                 defer if (value_ownership == .borrowed) value.decref();
-                try self.validate(atom, old, value);
+                try self.validate(atom, py.None(), value);
                 value_ownership = try writeSlot(@ptrCast(self), atom, ptr, value); // Default returns a new object
                 try self.base.notifyCreate(atom, value);
                 return value.newref();
@@ -593,16 +726,19 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                     return error.PyError;
                 }
 
-                if (ptr.*) |old| {
+                if (try readSlot(@ptrCast(self), atom, ptr)) |old| {
+                    defer if (storage_mode != .pointer) {
+                        old.decref(); // Always decref if static
+                    };
                     try self.validate(atom, old, value);
                     const r = try writeSlot(@ptrCast(self), atom, ptr, value.newref());
-                    defer old.decref();
+                    defer if (storage_mode == .pointer) {
+                        old.decref(); // Only decref after write completes
+                    };
                     defer if (r == .borrowed) value.decref();
                     try self.base.notifyUpdate(atom, old, value);
                 } else {
-                    const old = py.returnNone();
-                    defer old.decref();
-                    try self.validate(atom, old, value);
+                    try self.validate(atom, py.None(), value);
                     const r = try writeSlot(@ptrCast(self), atom, ptr, value.newref());
                     defer if (r == .borrowed) value.decref();
                     try self.base.notifyCreate(atom, value);
@@ -624,10 +760,10 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                 return error.PyError;
             }
             if (atom.slotPtr(self.base.info.index)) |ptr| {
-                if (ptr.*) |value| {
-                    defer value.decref();
+                if (try self.readSlot(atom, ptr)) |old| {
+                    defer old.decref();
                     deleteSlot(@ptrCast(self), atom, ptr);
-                    try self.base.notifyDelete(atom, value);
+                    try self.base.notifyDelete(atom, old);
                 }
                 // Else nothing to do
             } else {
@@ -648,9 +784,6 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         // Type def
         // --------------------------------------------------------------------------
         pub fn init(self: *Self, args: *Tuple, kwargs: ?*Dict) c_int {
-            if (comptime @hasDecl(impl, "storage_mode")) {
-                self.base.info.storage_mode = impl.storage_mode;
-            }
             if (comptime @hasDecl(impl, "default_mode")) {
                 self.base.info.default_mode = impl.default_mode;
             }
@@ -673,6 +806,9 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                 } else if (comptime @hasDecl(impl, "initDefault")) {
                     self.base.default_context = impl.initDefault() catch return -1;
                 }
+            }
+            if (comptime storage_mode != .pointer) {
+                self.base.info.storage_mode = storage_mode;
             }
             return 0;
         }
@@ -727,30 +863,41 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
     };
 }
 
+const all_modules = .{
+    @import("members/scalars.zig"),
+    @import("members/enum.zig"),
+    @import("members/instance.zig"),
+    @import("members/typed.zig"),
+    @import("members/tuple.zig"),
+    @import("members/event.zig"),
+};
+
+const all_strings = .{
+    "undefined", "type", "object", "name", "value","oldvalue", "create", "update", "delete",
+};
+
 pub fn initModule(mod: *py.Module) !void {
-    default_name_str = try py.Str.internFromString("<undefined>");
-    errdefer py.clear(&default_name_str);
+    // Strings used to create the change dicts
+    inline for (all_strings) |str| {
+        @field(@This(), str ++ "_str") = try Str.internFromString(str);
+        errdefer py.clear(@field(@This(), str ++ "_str"));
+    }
     try MemberBase.initType();
     errdefer MemberBase.deinitType();
     try mod.addObjectRef("Member", @ptrCast(MemberBase.TypeObject.?));
 
-    try scalars.initModule(mod);
-    errdefer scalars.deinitModule(mod);
-
-    try instance.initModule(mod);
-    errdefer instance.deinitModule(mod);
-
-    try typed.initModule(mod);
-    errdefer typed.deinitModule(mod);
-
-    try event.initModule(mod);
-    errdefer event.deinitModule(mod);
+    inline for(all_modules) |module| {
+        try module.initModule(mod);
+        errdefer module.deinitModule(mod);
+    }
 }
 
 pub fn deinitModule(mod: *py.Module) void {
-    py.clear(&default_name_str);
     MemberBase.deinitType();
-    scalars.deinitModule(mod);
-    event.deinitModule(mod);
-    instance.deinitModule(mod);
+    inline for(all_modules) |module| {
+        module.deinitModule(mod);
+    }
+    inline for(all_strings)|str| {
+        py.clear(&@field(@This(), str ++ "_str"));
+    }
 }

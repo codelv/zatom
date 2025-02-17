@@ -68,13 +68,13 @@ pub const EventBinder = extern struct {
             return py.typeError("Event callback must be callable", .{});
         }
         const topic = self.member.base.name;
-        self.atom.addObserver(topic, callback, 0xff) catch return null;
+        self.atom.addDynamicObserver(topic, callback, 0xff) catch return null;
         return py.returnNone();
     }
 
     pub fn unbind(self: *Self, callback: *Object) ?*Object {
         const topic = self.member.base.name;
-        self.atom.removeObserver(topic, callback) catch return null;
+        self.atom.removeDynamicObserver(topic, callback) catch return null;
         return py.returnNone();
     }
 
@@ -173,19 +173,17 @@ pub const EventMember = Member("Event", struct{
     }
 
     pub fn setattr(self: *MemberBase, atom: *AtomBase, value: *Object) !void {
-        if (!self.shouldNotify(atom)) {
-            return; // Nobody is listening
+        if (self.shouldNotify(atom)) {
+            try validate(self, atom, py.None(), value);
+
+            var change = try Dict.new();
+            defer change.decref();
+            try change.set(@ptrCast(type_str.?), @ptrCast(event_str.?));
+            try change.set(@ptrCast(object_str.?), @ptrCast(atom));
+            try change.set(@ptrCast(name_str.?), @ptrCast(self.name));
+            try change.set(@ptrCast(value_str.?), value);
+            try self.notifyChange(atom, change, .event);
         }
-
-        try validate(self, atom, py.None(), value);
-
-        var change = try Dict.new();
-        defer change.decref();
-        try change.set(@ptrCast(type_str.?), @ptrCast(event_str.?));
-        try change.set(@ptrCast(object_str.?), @ptrCast(atom));
-        try change.set(@ptrCast(name_str.?), @ptrCast(self.name));
-        try change.set(@ptrCast(value_str.?), value);
-        try self.notifyChange(atom, change);
     }
 
     pub fn delattr(_: *MemberBase, _: *AtomBase) !void {

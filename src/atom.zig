@@ -10,6 +10,7 @@ const Dict = py.Dict;
 const AtomMeta = @import("atom_meta.zig").AtomMeta;
 const MemberBase = @import("member.zig").MemberBase;
 const ObserverPool = @import("observer_pool.zig").ObserverPool;
+const ChangeType = @import("observer_pool.zig").ChangeType;
 const package_name = @import("api.zig").package_name;
 
 // If slot count is over this it will use a data pointer
@@ -68,9 +69,8 @@ pub const AtomBase = extern struct {
         }
         if (kwargs) |kw| {
             var pos: isize = 0;
-            const obj: *Object = @ptrCast(self);
             while (kw.next(&pos)) |entry| {
-                obj.setAttr(@ptrCast(entry.key), entry.value) catch return -1;
+                self.setAttr(@ptrCast(entry.key), entry.value) catch return -1;
             }
         }
         return 0;
@@ -89,13 +89,20 @@ pub const AtomBase = extern struct {
     }
 
     // Get a pointer to the ObserverPool from the manager on the type.
-    pub fn observerPool(self: *Self) ?*ObserverPool {
+    pub fn dynamicObserverPool(self: *Self) ?*ObserverPool {
         if (self.info.has_observers) {
             const meta: *AtomMeta = @ptrCast(self.typeref());
             return meta.pool_manager.?.get(self.info.pool_index);
         }
         return null;
     }
+
+    // Get a pointer to the static observer pool
+    pub fn staticObserverPool(self: *Self) ?*ObserverPool {
+        const meta: *AtomMeta = @ptrCast(self.typeref());
+        return meta.static_observers;
+    }
+
 
     // Type check the given object. This assumes the module was initialized
     pub fn check(obj: *Object) bool {
@@ -106,49 +113,157 @@ pub const AtomBase = extern struct {
     // Internal observer api
     // --------------------------------------------------------------------------
     // It should be a string, but it can raise an error if topic is not hashable
-    pub fn hasObservers(self: *Self, topic: *Str) !bool {
-        if (self.observerPool()) |pool| {
+    pub fn hasDynamicObservers(self: *Self, topic: *Str) !bool {
+        if (self.dynamicObserverPool()) |pool| {
             return try pool.hasTopic(topic);
         }
         return false;
     }
 
+    pub fn hasDynamicObserver(self: *Self, topic: *Str, observer: *Object) !bool {
+        if (self.dynamicObserverPool()) |pool| {
+            return try pool.hasObserver(topic, observer, @intFromEnum(ChangeType.any));
+        }
+        return false;
+    }
+
+    pub fn hasStaticObservers(self: *Self, topic: *Str) !bool {
+        if (self.staticObserverPool()) |pool| {
+            return try pool.hasTopic(topic);
+        }
+        return false;
+    }
+
+    pub fn hasAnyObservers(self: *Self, topic: *Str) !bool {
+        return (
+            try self.hasStaticObservers(topic) or
+            try self.hasDynamicObservers(topic)
+        );
+    }
+
     // Assumes caller has checked observer is callable or str
-    pub fn addObserver(self: *Self, topic: *Str, observer: *Object, change_types: u8) !void {
+    pub fn addDynamicObserver(self: *Self, topic: *Str, observer: *Object, change_types: u8) py.Error!void {
         if (!self.info.has_observers) {
             const meta: *AtomMeta = @ptrCast(self.typeref());
             std.debug.assert(meta.typeCheckSelf());
             self.info.pool_index = try meta.pool_manager.?.acquire(py.allocator);
             self.info.has_observers = true;
         }
-        const pool = self.observerPool().?;
-        try pool.addObserver(py.allocator, topic, observer, change_types);
+        const pool = self.dynamicObserverPool().?;
+        pool.addObserver(py.allocator, topic, observer, change_types) catch |err| {
+            switch (err) {
+                error.PyError => {},
+                error.OutOfMemory => {_ = py.memoryError(); }
+            }
+            return error.PyError;
+        };
     }
 
-    pub fn removeObserver(self: *Self, topic: *Str, observer: *Object) !void {
-        if (self.observerPool()) |pool| {
+    pub fn removeDynamicObserver(self: *Self, topic: *Str, observer: *Object) !void {
+        if (self.dynamicObserverPool()) |pool| {
             try pool.removeObserver(py.allocator, topic, observer);
         }
     }
 
-    pub fn clearObservers(self: *Self, topic: *Str) !void {
-        if (self.observerPool()) |pool| {
+    pub fn removeTopic(self: *Self, topic: *Str) !void {
+        if (self.dynamicObserverPool()) |pool| {
             try pool.removeTopic(py.allocator, topic);
         }
     }
 
+    pub fn clearDynamicObservers(self: *Self) !void {
+        if (self.dynamicObserverPool()) |pool| {
+            try pool.clear(py.allocator);
+        }
+    }
+
+    pub fn notifyInternal(self: *Self, topic: *Str, args: *Tuple, kwargs: ?*Dict, change_types: u8) !void {
+        if (self.staticObserverPool()) |pool| {
+            try pool.notify(py.allocator, topic, args, kwargs, change_types);
+        }
+        if (self.dynamicObserverPool()) |pool| {
+            try pool.notify(py.allocator, topic, args, kwargs, change_types);
+        }
+    }
 
     // --------------------------------------------------------------------------
     // Methods
     // --------------------------------------------------------------------------
-    pub fn has_observers(self: *Self, topic: *Str) ?*Object {
-        if (topic == py.None()) {
+    pub fn has_observers(self: *Self, args: [*]*Object, n: isize) ?*Object {
+        if (n == 0) {
             return py.returnBool(self.info.has_observers);
         }
-        if (!topic.typeCheckSelf()) {
-            return py.typeError("has_observers topic must be a str", .{});
+        if (n == 1 and Str.check(args[0])) {
+            return py.returnBool(self.hasDynamicObservers(@ptrCast(args[1])) catch return null);
         }
-        return py.returnBool(self.hasObservers(topic) catch return null);
+        return py.typeError("Invalid arguments. Signature is has_observers(topic: Optional[str] = None)", .{});
+    }
+
+    pub fn has_observer(self: *Self, args: [*]*Object, n: isize) ?*Object {
+        if (n != 2 or !Str.check(args[0]) or !args[1].isCallable()) {
+            return py.typeError("Invalid arguments. Signature is has_observer(topic: str, observer: Callable)", .{});
+        }
+        return py.returnBool(self.hasDynamicObserver(@ptrCast(args[0]), args[1]) catch return null);
+    }
+
+    pub fn observe(self: *Self, args: [*]*Object, n: isize) ?*Object {
+        if (n < 2 or n > 3 or !args[1].isCallable()) {
+            return py.typeError("Invalid arguments. Signature is observe(topics: str | Iterable[str], observer: Callable, change_types: int=0xff)", .{});
+        }
+        const topic = args[0];
+        const callback = args[1];
+        const change_types: u8 = blk: {
+            if (n == 3) {
+                if (!Int.check(args[2])) {
+                    return py.typeError("change_types must be an integer", .{});
+                }
+                break :blk Int.as(@ptrCast(args[2]), u8) catch return null;
+            }
+            break :blk @intFromEnum(ChangeType.any);
+        };
+        if (Str.check(topic)) {
+            self.addDynamicObserver(@ptrCast(topic), callback, change_types) catch return null;
+        } else {
+            const iter = topic.iter() catch return null;
+            while (iter.next() catch return null) |item| {
+                defer item.decref();
+                if (!Str.check(item)) {
+                    return py.typeError("topics names must be str", .{});
+                }
+                self.addDynamicObserver(@ptrCast(item), callback, change_types) catch return null;
+            }
+        }
+        return py.returnNone();
+    }
+
+    pub fn unobserve(self: *Self, args: [*]*Object, n: isize) ?*Object {
+        switch (n) {
+            0 => {
+                self.clearDynamicObservers() catch return null;
+                return py.returnNone();
+            },
+            1 => if (Str.check(args[0])) {
+                self.removeTopic(@ptrCast(args[0])) catch return null;
+                return py.returnNone();
+            },
+            2 => if (Str.check(args[0])) {
+                self.removeDynamicObserver(@ptrCast(args[0]), args[1]) catch return null;
+                return py.returnNone();
+            },
+            else => {},
+        }
+        return py.typeError("Invalid arguments. Signature is unobserve(topic: Optional[str]=None, observer: Optional[Callable]=None)", .{});
+    }
+
+    pub fn notify(self: *Self, args: *Tuple, kwargs: ?*Dict) ?*Object {
+        const n = args.size() catch return null;
+        if (n < 1 or !Str.check(args.getUnsafe(0).?)) {
+            return py.typeError("Invalid arguments. Signature is notify(topic: str, *args, **kwargs)", .{});
+        }
+        const topic: *Str = @ptrCast(args.getUnsafe(0).?);
+        const new_args = args.slice(1, n) catch return null;
+        self.notifyInternal(topic, new_args, kwargs, @intFromEnum(ChangeType.any)) catch return null;
+        return py.returnNone();
     }
 
     pub fn get_member(cls: *Object, name: *Object) ?*Object {
@@ -171,7 +286,7 @@ pub const AtomBase = extern struct {
 
     pub fn sizeof(self: *Self) ?*Object {
         var size: usize = @sizeOf(Self);
-        if (self.observerPool()) |pool| {
+        if (self.dynamicObserverPool()) |pool| {
             size += pool.sizeof();
         }
         return @ptrCast(Int.newUnchecked(size));
@@ -183,7 +298,7 @@ pub const AtomBase = extern struct {
     pub fn dealloc(self: *Self) void {
         self.gcUntrack();
         _ = self.clear();
-        if (self.observerPool() != null) {
+        if (self.dynamicObserverPool() != null) {
             const meta: *AtomMeta = @ptrCast(self.typeref());
             meta.pool_manager.?.release(py.allocator, self.info.pool_index) catch {
                 _ = py.memoryError();
@@ -195,7 +310,7 @@ pub const AtomBase = extern struct {
     }
 
     pub fn clear(self: *Self) c_int {
-        if (self.observerPool()) |pool| {
+        if (self.dynamicObserverPool()) |pool| {
             pool.clear(py.allocator) catch |err| {
                 switch(err) {
                     error.OutOfMemory => {_ = py.memoryError();},
@@ -225,7 +340,7 @@ pub const AtomBase = extern struct {
 
     // Check if object is an atom_meta
     pub fn traverse(self: *Self, visit: py.visitproc, arg: ?*anyopaque) c_int {
-        if (self.observerPool()) |pool| {
+        if (self.dynamicObserverPool()) |pool| {
             const r = pool.traverse(visit, arg);
             if (r != 0)
                 return r;
@@ -252,6 +367,11 @@ pub const AtomBase = extern struct {
     const methods = [_]py.MethodDef{
         .{ .ml_name = "get_member", .ml_meth = @constCast(@ptrCast(&get_member)), .ml_flags = py.c.METH_CLASS | py.c.METH_O, .ml_doc = "Get the atom member with the given name" },
         .{ .ml_name = "members", .ml_meth = @constCast(@ptrCast(&get_members)), .ml_flags = py.c.METH_CLASS | py.c.METH_NOARGS, .ml_doc = "Get atom members" },
+        .{ .ml_name = "observe", .ml_meth = @constCast(@ptrCast(&observe)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Register an observer callback to observe changes on the given topic(s)" },
+        .{ .ml_name = "unobserve", .ml_meth = @constCast(@ptrCast(&unobserve)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Unregister an observer callback for the given topic(s)." },
+        .{ .ml_name = "has_observers", .ml_meth = @constCast(@ptrCast(&has_observers)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Get whether the atom has observers for a given topic." },
+        .{ .ml_name = "has_observer", .ml_meth = @constCast(@ptrCast(&has_observer)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Get whether the atom has the given observer for a given topic." },
+        .{ .ml_name = "notify", .ml_meth = @constCast(@ptrCast(&notify)), .ml_flags = py.c.METH_VARARGS | py.c.METH_KEYWORDS, .ml_doc = "Call the registered observers for a given topic with positional and keyword arguments." },
         .{ .ml_name = "__sizeof__", .ml_meth = @constCast(@ptrCast(&sizeof)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Get size of object in memory in bytes" },
         .{}, // sentinel
     };
@@ -388,3 +508,4 @@ pub fn deinitModule(mod: *py.Module) void {
     AtomBase.deinitType();
     _ = mod; // TODO: Remove dead type
 }
+

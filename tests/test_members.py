@@ -1,6 +1,7 @@
 import pytest
 from zatom.api import (
-    AtomMeta, Atom, Member, Value, Str, Int, Bool, Bytes, Float, Typed, Instance
+    AtomMeta, Atom, Member,
+    Value, Str, Int, Bool, Bytes, Float, Typed, Instance, Enum, Tuple
 )
 
 
@@ -108,9 +109,11 @@ def test_bool():
         b = Bool()
 
     assert A.a.index == 0
-    assert A.a.bit == 0
+    assert A.a.bitsize == 1
+    assert A.a.offset == 0
     assert A.b.index == 0
-    assert A.b.bit == 1
+    assert A.b.offset == 2 # There is an extra bit for tracking "null"
+    assert A.b.bitsize == 1
     a = A()
 
     assert a.a == False
@@ -184,3 +187,48 @@ def test_typed():
     with pytest.raises(TypeError):
         a.name = 1
 
+
+def test_tuple():
+    class A(Atom):
+        items = Tuple()
+        names = Tuple(str)
+        options = Tuple(int, default=(1,))
+
+    a = A()
+    assert a.items == ()
+    a.items = (1, 2, 3)
+    assert a.items == (1, 2, 3)
+    a.names = ("1", "2")
+    assert a.names == ("1", "2")
+    with pytest.raises(TypeError):
+        a.names = ["1", 2]
+    with pytest.raises(TypeError):
+        a.names = ("1", 2)
+    assert a.options == (1,)
+
+
+def test_enum():
+    class A(Atom):
+        option = Enum(1, 2, 3, 4, 5, default=3)
+        alt = Enum("one", "two")
+
+    assert A.option.index == 0
+    assert A.option.offset == 0
+    assert A.option.bitsize == 3
+    assert A.alt.index == 0
+    assert A.alt.offset == 4
+    assert A.alt.bitsize == 1
+
+    a = A()
+    assert a.option == 3
+    a.option = 2
+    assert a.option == 2
+    assert a.alt == "one"
+    A.alt.get_slot(a) == 0
+    a.alt = "two"
+    A.alt.get_slot(a) == 1
+    assert a.alt == "two"
+    assert a.option == 2
+
+    with pytest.raises(ValueError):
+        a.option = 6

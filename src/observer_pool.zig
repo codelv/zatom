@@ -12,12 +12,14 @@ comptime {
     std.debug.assert(isize == py.c.Py_hash_t);
 }
 
-pub const ChangeTypes = enum(u8) {
-    any,
-    create,
-    update,
-    delete,
-    event,
+pub const ChangeType = enum(u8) {
+    create = 1,
+    update = 2,
+    delete = 4,
+    event = 8,
+    property = 16,
+    container = 32,
+    any = 0xFF,
 };
 
 pub const ObserverInfo = struct {
@@ -45,7 +47,7 @@ pub const PoolGuard = struct {
     owner: *ObserverPool,
     mods: std.ArrayList(Mod),
 
-    pub fn init(owner: *ObserverPool, allocator: std.mem.Allocator) !Self {
+    pub fn init(owner: *ObserverPool, allocator: std.mem.Allocator) Self {
         return Self{
             .owner = owner,
             .mods = std.ArrayList(Mod).init(allocator),
@@ -64,31 +66,35 @@ pub const PoolGuard = struct {
             return;
         }
         self.owner.guard = null; // Clear the guard
+        const allocator = self.mods.allocator;
         for (self.mods.items) |mod| {
             switch (mod) {
                 .add_observer => |data| {
                     defer data.observer.decref();
                     defer data.topic.decref();
-                    try data.pool.addObserver(data.topic, data.observer, data.change_types);
+                    try data.pool.addObserver(allocator, data.topic, data.observer, data.change_types);
                 },
                 .remove_topic => |data| {
                     defer data.topic.decref();
-                    try data.pool.removeTopic(data.topic);
+                    try data.pool.removeTopic(allocator, data.topic);
                 },
                 .remove_observer => |data| {
                     defer data.topic.decref();
                     defer data.observer.decref();
-                    try data.pool.removeObserver(data.topic, data.observer);
+                    try data.pool.removeObserver(allocator, data.topic, data.observer);
                 },
                 .clear => |pool| {
-                    try pool.clear();
+                    try pool.clear(allocator);
+                },
+                .release => |data| {
+                    try data.mgr.release(allocator, data.index);
                 },
                 .deinit => |pool| {
                     if (pool.guard) |guard| {
                         try guard.mods.append(Mod{ .deinit = pool });
                         return;
                     }
-                    pool.deinit();
+                    pool.deinit(allocator);
                 },
             }
         }
@@ -108,161 +114,161 @@ pub const PoolGuard = struct {
 };
 
 
-pub const MemberGuard = struct {
-    const Self = @This();
-
-    pub const Mod = union(enum) {
-        add: struct { pool: *MemberObservers, observer: *Object, change_types: u8 },
-        remove: struct { pool: *MemberObservers, observer: *Object },
-        clear: *MemberObservers,
-        deinit: *MemberObservers,
-    };
-
-    mods: std.ArrayList(Mod),
-    owner: *MemberObservers,
-
-    pub fn init(owner: *MemberObservers, allocator: std.mem.Allocator) !Self {
-        return Self{
-            .owner = owner,
-            .mods = std.ArrayList(Mod).init(allocator),
-        };
-    }
-
-    // Has to be a separate function due to the self ptr
-    pub fn start(self: *Self) void {
-        if (self.owner.guard == null) {
-            self.owner.guard = self;
-        }
-    }
-
-    pub fn finish(self: *Self) !void {
-        if (self.owner.guard != self) {
-            return;
-        }
-        self.owner.guard = null; // Clear the guard
-        for (self.mods.items) |mod| {
-            switch (mod) {
-                .add => |data| {
-                    defer data.observer.decref();
-                    try data.pool.add(data.observer, data.change_types);
-                },
-                .remove=> |data| {
-                    defer data.observer.decref();
-                    try data.pool.remove(data.topic, data.observer);
-                },
-                .clear => |pool| {
-                    try pool.clear();
-                },
-            }
-        }
-        self.mods.clearRetainingCapacity();
-    }
-
-    pub fn sizeof(self: *Self) usize {
-        var size: usize = @sizeOf(Self);
-        size += @sizeOf(Mod) * self.mods.capacity;
-        return size;
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.mods.clearAndFree();
-    }
-
-};
-
-
-pub const MemberObservers = struct {
-    pub const ObserverMap = std.AutoHashMapUnmanaged(isize, ObserverInfo);
-    map: ObserverMap = .{},
-    guard: ?*MemberGuard = null,
-
-    pub fn new(allocator: std.mem.Allocator) py.Error!*MemberObservers {
-        const self = try allocator.create(MemberObservers) catch {
-            _ = py.memoryError();
-            return error.PyError;
-        };
-        self.* = .{};
-        return self;
-    }
-
-    pub inline fn count(self: *const MemberObservers) u32 {
-        return self.map.count();
-    }
-
-    pub fn contains(self: *const MemberObservers, observer: *Object, change_types: u8) py.Error!bool {
-        if (self.map.getPtr(try observer.hash())) |info| {
-            return info.enabled(change_types);
-        }
-        return false;
-    }
-
-    pub fn add(self: *MemberObservers, allocator: std.mem.Allocator, observer: *Object, change_types: u8) !void {
-        if (self.guard) |guard| {
-            try guard.mods.append(.{.add=.{.pool=self, .observer=observer.newref(), .change_types=change_types}});
-            return;
-        }
-        const hash = try observer.hash();
-        if (self.map.getPtr(hash)) |item| {
-            item.change_types = change_types;
-        } else {
-            try self.map.put(allocator, hash, ObserverInfo{ .observer = observer.newref(), .change_types = change_types });
-        }
-    }
-
-    pub fn remove(self: *MemberObservers, observer: *Object) !void {
-        if (self.guard) |guard| {
-            try guard.mods.append(.{.remove=.{.pool=self, .observer=observer.newref()}});
-            return;
-        }
-        if (self.map.fetchRemove(try observer.hash())) |entry| {
-            entry.value.observer.decref();
-        }
-    }
-
-    pub fn notify(self: *MemberObservers, allocator: std.mem.Allocator, atom: *AtomBase, args: *Tuple, kwargs: ?*Dict, change_types: u8) !bool {
-        var guard = MemberGuard.init(allocator);
-        defer guard.deinit();
-        guard.start(self);
-        defer guard.finalize();
-
-        var items = self.map.valueIterator();
-        while (items.next()) |item| {
-            if (item.enabled(change_types)) {
-                if (Str.checkExact(item.observer)) {
-                    const method = try atom.getAttr(@ptrCast(item.observer));
-                    defer method.decref();
-                    const ok = try method.call( args, kwargs );
-                    defer ok.decref();
-                } else {
-                    const ok = try item.observer.call( args, kwargs );
-                    defer ok.decref();
-                }
-            }
-        }
-
-    }
-
-    pub fn clear(self: *MemberObservers) !void {
-        if (self.guard) |guard| {
-            try guard.mods.append(.{.clear=.{.pool=self}});
-            return;
-        }
-        var items = self.map.valueIterator();
-        // Relase all observer references
-        while (items.next()) |item| {
-            item.observer.decref();
-        }
-        self.map.clearRetainingCapacity();
-    }
-
-    pub fn deinit(self: *MemberObservers, allocator: std.mem.Allocator) void {
-        std.debug.assert(self.guard == null);
-        self.clear() catch unreachable;
-        self.map.clearAndFree(allocator);
-        allocator.destroy(self);
-        self.* = undefined;
-    }
-};
+// pub const MemberGuard = struct {
+//     const Self = @This();
+//
+//     pub const Mod = union(enum) {
+//         add: struct { pool: *MemberObservers, observer: *Object, change_types: u8 },
+//         remove: struct { pool: *MemberObservers, observer: *Object },
+//         clear: *MemberObservers,
+//         deinit: *MemberObservers,
+//     };
+//
+//     mods: std.ArrayList(Mod),
+//     owner: *MemberObservers,
+//
+//     pub fn init(owner: *MemberObservers, allocator: std.mem.Allocator) !Self {
+//         return Self{
+//             .owner = owner,
+//             .mods = std.ArrayList(Mod).init(allocator),
+//         };
+//     }
+//
+//     // Has to be a separate function due to the self ptr
+//     pub fn start(self: *Self) void {
+//         if (self.owner.guard == null) {
+//             self.owner.guard = self;
+//         }
+//     }
+//
+//     pub fn finish(self: *Self) !void {
+//         if (self.owner.guard != self) {
+//             return;
+//         }
+//         self.owner.guard = null; // Clear the guard
+//         for (self.mods.items) |mod| {
+//             switch (mod) {
+//                 .add => |data| {
+//                     defer data.observer.decref();
+//                     try data.pool.add(data.observer, data.change_types);
+//                 },
+//                 .remove=> |data| {
+//                     defer data.observer.decref();
+//                     try data.pool.remove(data.topic, data.observer);
+//                 },
+//                 .clear => |pool| {
+//                     try pool.clear();
+//                 },
+//             }
+//         }
+//         self.mods.clearRetainingCapacity();
+//     }
+//
+//     pub fn sizeof(self: *Self) usize {
+//         var size: usize = @sizeOf(Self);
+//         size += @sizeOf(Mod) * self.mods.capacity;
+//         return size;
+//     }
+//
+//     pub fn deinit(self: *Self) void {
+//         self.mods.clearAndFree();
+//     }
+//
+// };
+//
+//
+// pub const MemberObservers = struct {
+//     pub const ObserverMap = std.AutoHashMapUnmanaged(isize, ObserverInfo);
+//     map: ObserverMap = .{},
+//     guard: ?*MemberGuard = null,
+//
+//     pub fn new(allocator: std.mem.Allocator) py.Error!*MemberObservers {
+//         const self = try allocator.create(MemberObservers) catch {
+//             _ = py.memoryError();
+//             return error.PyError;
+//         };
+//         self.* = .{};
+//         return self;
+//     }
+//
+//     pub inline fn count(self: *const MemberObservers) u32 {
+//         return self.map.count();
+//     }
+//
+//     pub fn contains(self: *const MemberObservers, observer: *Object, change_types: u8) py.Error!bool {
+//         if (self.map.getPtr(try observer.hash())) |info| {
+//             return info.enabled(change_types);
+//         }
+//         return false;
+//     }
+//
+//     pub fn add(self: *MemberObservers, allocator: std.mem.Allocator, observer: *Object, change_types: u8) !void {
+//         if (self.guard) |guard| {
+//             try guard.mods.append(.{.add=.{.pool=self, .observer=observer.newref(), .change_types=change_types}});
+//             return;
+//         }
+//         const hash = try observer.hash();
+//         if (self.map.getPtr(hash)) |item| {
+//             item.change_types = change_types;
+//         } else {
+//             try self.map.put(allocator, hash, ObserverInfo{ .observer = observer.newref(), .change_types = change_types });
+//         }
+//     }
+//
+//     pub fn remove(self: *MemberObservers, observer: *Object) !void {
+//         if (self.guard) |guard| {
+//             try guard.mods.append(.{.remove=.{.pool=self, .observer=observer.newref()}});
+//             return;
+//         }
+//         if (self.map.fetchRemove(try observer.hash())) |entry| {
+//             entry.value.observer.decref();
+//         }
+//     }
+//
+//     pub fn notify(self: *MemberObservers, allocator: std.mem.Allocator, atom: *AtomBase, args: *Tuple, kwargs: ?*Dict, change_types: u8) !bool {
+//         var guard = MemberGuard.init(allocator);
+//         defer guard.deinit();
+//         guard.start(self);
+//         defer guard.finalize();
+//
+//         var items = self.map.valueIterator();
+//         while (items.next()) |item| {
+//             if (item.enabled(change_types)) {
+//                 if (Str.checkExact(item.observer)) {
+//                     const method = try atom.getAttr(@ptrCast(item.observer));
+//                     defer method.decref();
+//                     const ok = try method.call( args, kwargs );
+//                     defer ok.decref();
+//                 } else {
+//                     const ok = try item.observer.call( args, kwargs );
+//                     defer ok.decref();
+//                 }
+//             }
+//         }
+//
+//     }
+//
+//     pub fn clear(self: *MemberObservers) !void {
+//         if (self.guard) |guard| {
+//             try guard.mods.append(.{.clear=.{.pool=self}});
+//             return;
+//         }
+//         var items = self.map.valueIterator();
+//         // Relase all observer references
+//         while (items.next()) |item| {
+//             item.observer.decref();
+//         }
+//         self.map.clearRetainingCapacity();
+//     }
+//
+//     pub fn deinit(self: *MemberObservers, allocator: std.mem.Allocator) void {
+//         std.debug.assert(self.guard == null);
+//         self.clear() catch unreachable;
+//         self.map.clearAndFree(allocator);
+//         allocator.destroy(self);
+//         self.* = undefined;
+//     }
+// };
 
 pub const ObserverPool = struct {
     // TODO: Convert to unmanaged...
@@ -345,12 +351,14 @@ pub const ObserverPool = struct {
             try guard.mods.append(.{ .remove_topic = .{ .pool = self, .topic = topic.newref() } });
             return;
         }
-        if (self.map.fetchRemove(topic)) |entry| {
-            var iter = entry.value.keyIterator();
+        const key = try topic.hash();
+        if (self.map.getPtr(key)) |observer_map| {
+            var iter = observer_map.valueIterator();
             while (iter.next()) |item| {
                 item.observer.decref();
             }
-            entry.value.deinit(allocator);
+            observer_map.deinit(allocator);
+            _ = self.map.remove(key);
         }
     }
 
@@ -373,19 +381,17 @@ pub const ObserverPool = struct {
         self.map.clearRetainingCapacity();
     }
 
-    pub fn notify(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, args: *Tuple, kwargs: ?*Dict, change_types: u8) !bool {
+    pub fn notify(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, args: *Tuple, kwargs: ?*Dict, change_types: u8) !void {
         var ok: bool = true;
-        if (self.map.getPtr(topic)) |observer_map| {
+        if (self.map.getPtr(try topic.hash())) |observer_map| {
             var guard = PoolGuard.init(self, allocator);
             defer guard.deinit();
-            guard.start(self);
-            defer guard.finish() catch {
-                ok = false;
-            };
+            guard.start();
+            defer guard.finish() catch {ok = false;};
 
             var items = observer_map.valueIterator();
             while (items.next()) |item| {
-                if (try item.isTrue()) {
+                if (try item.observer.evalsTrue()) {
                     if (item.enabled(change_types)) {
                         const result = try item.observer.call(args, kwargs);
                         result.decref();
@@ -399,7 +405,9 @@ pub const ObserverPool = struct {
                 }
             }
         }
-        return ok;
+        if (!ok) {
+            return error.PyError;
+        }
     }
 
     pub fn sizeof(self: *ObserverPool) usize {
