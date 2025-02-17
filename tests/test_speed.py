@@ -1,6 +1,7 @@
 import pytest
-from zatom import api as zatom
 from atom import api as catom
+
+from zatom import api as zatom
 
 try:
     import pytest_benchmark  # noqa: F401

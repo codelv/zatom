@@ -1,7 +1,20 @@
 import pytest
+
 from zatom.api import (
-    AtomMeta, Atom, Member,
-    Value, Str, Int, Bool, Bytes, Float, Typed, Instance, Enum, Tuple
+    Atom,
+    AtomMeta,
+    Bool,
+    Bytes,
+    Enum,
+    Event,
+    Float,
+    Instance,
+    Int,
+    Member,
+    Str,
+    Tuple,
+    Typed,
+    Value,
 )
 
 
@@ -48,8 +61,9 @@ def test_atom_two_members():
 def test_atom_member_tag():
     class A(Atom):
         m = Member().tag(foo=True)
+
     assert A.m.metadata is not None
-    assert A.m.metadata['foo'] is True
+    assert A.m.metadata["foo"] is True
     del A.m.metadata
     assert A.m.metadata is None
     A.m.metadata = {"bar": 1}
@@ -112,7 +126,7 @@ def test_bool():
     assert A.a.bitsize == 1
     assert A.a.offset == 0
     assert A.b.index == 0
-    assert A.b.offset == 2 # There is an extra bit for tracking "null"
+    assert A.b.offset == 2  # There is an extra bit for tracking "null"
     assert A.b.bitsize == 1
     a = A()
 
@@ -142,11 +156,12 @@ def test_float():
     with pytest.raises(TypeError):
         a.z = None
 
+
 def test_instance():
     class A(Atom):
         name = Instance(str)
         required_name = Instance(str, optional=False)
-        data = Instance(dict, None, {"x":1})
+        data = Instance(dict, None, {"x": 1})
         cls = Instance((str, list), factory=lambda: "foo")
 
     a = A()
@@ -157,7 +172,7 @@ def test_instance():
         a.name = 1
 
     with pytest.raises(TypeError):
-        a.required_name # No defai;t
+        a.required_name  # No defai;t
 
     a.required_name = "required"
     assert a.required_name == "required"
@@ -168,7 +183,7 @@ def test_instance():
     with pytest.raises(TypeError):
         a.data = []
 
-    my_list = [1,2,3]
+    my_list = [1, 2, 3]
     assert a.cls == "foo"
     a.cls = my_list
     assert a.cls == my_list
@@ -232,3 +247,9 @@ def test_enum():
 
     with pytest.raises(ValueError):
         a.option = 6
+
+
+def test_event():
+    class A(Atom):
+        activated = Event()
+        clicked = Event(dict)
