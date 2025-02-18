@@ -287,11 +287,11 @@ pub const ObserverPool = struct {
         return pool;
     }
 
-    pub fn hasTopic(self: *ObserverPool, topic: *Str) py.Error!bool {
+    pub fn hasTopic(self: ObserverPool, topic: *Str) py.Error!bool {
         return self.map.contains(try topic.hash());
     }
 
-    pub fn hasObserver(self: *ObserverPool, topic: *Str, observer: *Object, change_types: u8) py.Error!bool {
+    pub fn hasObserver(self: ObserverPool, topic: *Str, observer: *Object, change_types: u8) py.Error!bool {
         if (self.map.getPtr(try topic.hash())) |observer_map| {
             if (observer_map.getPtr(try observer.hash())) |info| {
                 return info.enabled(change_types);
@@ -357,25 +357,6 @@ pub const ObserverPool = struct {
         }
     }
 
-    // Remove all observers from the pool. If the pool is guarded
-    // by a modification guard this may require allocation.
-    pub fn clear(self: *ObserverPool, allocator: std.mem.Allocator) py.Error!void {
-        if (self.guard) |guard| {
-            guard.mods.append(.{ .clear = self }) catch return py.memoryError();
-            return;
-        }
-        var topics = self.map.valueIterator();
-        while (topics.next()) |observer_map| {
-            var items = observer_map.valueIterator();
-            // Relase all observer references
-            while (items.next()) |item| {
-                item.observer.decref();
-            }
-            observer_map.deinit(allocator);
-        }
-        self.map.clearRetainingCapacity();
-    }
-
     pub fn notify(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, args: *Tuple, kwargs: ?*Dict, change_types: u8) py.Error!void {
         var ok: bool = true;
         if (self.map.getPtr(try topic.hash())) |observer_map| {
@@ -407,7 +388,7 @@ pub const ObserverPool = struct {
         }
     }
 
-    pub fn sizeof(self: *ObserverPool) usize {
+    pub fn sizeof(self: ObserverPool) usize {
         var size: usize = @sizeOf(ObserverInfo);
         if (self.guard) |guard| {
             size += guard.sizeof();
@@ -420,7 +401,26 @@ pub const ObserverPool = struct {
         return size;
     }
 
-    pub fn traverse(self: *ObserverPool, func: py.visitproc, arg: ?*anyopaque) c_int {
+    // Remove all observers from the pool. If the pool is guarded
+    // by a modification guard this may require allocation.
+    pub fn clear(self: *ObserverPool, allocator: std.mem.Allocator) py.Error!void {
+        if (self.guard) |guard| {
+            guard.mods.append(.{ .clear = self }) catch return py.memoryError();
+            return;
+        }
+        var topics = self.map.valueIterator();
+        while (topics.next()) |observer_map| {
+            var items = observer_map.valueIterator();
+            // Relase all observer references
+            while (items.next()) |item| {
+                item.observer.decref();
+            }
+            observer_map.deinit(allocator);
+        }
+        self.map.clearRetainingCapacity();
+    }
+
+    pub fn traverse(self: ObserverPool, func: py.visitproc, arg: ?*anyopaque) c_int {
         var topics = self.map.valueIterator();
         while (topics.next()) |observer_map| {
             var items = observer_map.valueIterator();
@@ -489,7 +489,7 @@ pub const PoolManager = struct {
         self.free_slots.append(allocator, index) catch return py.memoryError();
     }
 
-    pub fn sizeof(self: *PoolManager) usize {
+    pub fn sizeof(self: PoolManager) usize {
         var size: usize = @sizeOf(PoolManager);
         size += @sizeOf(?*ObserverPool) * self.pools.capacity;
         size += @sizeOf(u32) * self.free_slots.capacity;
@@ -498,11 +498,11 @@ pub const PoolManager = struct {
 
     // Clear all the pools
     pub fn clear(self: *PoolManager, allocator: std.mem.Allocator) void {
-        for (self.pools.items, 0..) |ptr, i| {
-            if (ptr) |pool| {
+        for (self.pools.items) |*ptr| {
+            if (ptr.*) |pool| {
                 pool.deinit(allocator);
+                ptr.* = null;
             }
-            self.pools.items[i] = null;
         }
         self.pools.clearRetainingCapacity();
         self.free_slots.clearRetainingCapacity();

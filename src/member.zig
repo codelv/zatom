@@ -477,12 +477,12 @@ pub const MemberBase = extern struct {
     }
 
     // Mask for slot's data bits
-    pub inline fn slotDataMask(self: *Self) usize {
+    pub inline fn slotDataMask(self: Self) usize {
         return (@as(usize, self.info.width) + 1) << self.info.offset;
     }
 
     // Mask for slot's 'is set' bit
-    pub inline fn slotSetMask(self: *Self) usize {
+    pub inline fn slotSetMask(self: Self) usize {
         const pos: u6 = self.info.offset + self.info.width + 1;
         return @as(usize, @as(usize, 1) << pos);
     }

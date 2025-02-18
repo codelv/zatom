@@ -31,7 +31,7 @@ pub const EventBinder = extern struct {
     pub usingnamespace py.ObjectProtocol(Self);
 
     // Type check the given object. This assumes the module was initialized
-    pub fn check(obj: *Object) bool {
+    pub fn check(obj: *const Object) bool {
         return obj.typeCheck(TypeObject.?);
     }
 

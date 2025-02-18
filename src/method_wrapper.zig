@@ -30,7 +30,10 @@ pub fn MethodWrapper(comptime T: type) type {
             args.parseTyped(.{&method}) catch return null;
             const self: *Self = @ptrCast(cls.genericNew(null, null) catch return null);
             if (method.getSelf()) |self| {
-                if (T.check(self)) {}
+                if (!T.check(self)) {
+                    return py.typeErrorObject(null, "MethodWrapper owner is not the correct type", .{});
+
+                }
             } else {
                 return py.typeErrorObject(null, "Cannot wrap unbound method", .{});
             }

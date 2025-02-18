@@ -52,7 +52,7 @@ pub const AtomBase = extern struct {
 
     pub fn new(cls: *Type, args: *Tuple, kwargs: ?*Dict) ?*Self {
         if (!AtomMeta.check(@ptrCast(cls))) {
-            return py.typeError("atom meta", .{}) catch null;
+            return py.typeErrorObject(null, "atom meta", .{});
         }
         const self: *Self = @ptrCast(cls.genericNew(args, kwargs) catch return null);
         const meta: *AtomMeta = @ptrCast(cls);
@@ -62,7 +62,7 @@ pub const AtomBase = extern struct {
 
     pub fn init(self: *Self, args: *Tuple, kwargs: ?*Dict) c_int {
         if (args.sizeUnchecked() > 0) {
-            return py.typeError("__init__() takes no positional arguments", .{}) catch -1;
+            return py.typeErrorObject(-1, "__init__() takes no positional arguments", .{});
         }
         if (kwargs) |kw| {
             var pos: isize = 0;
@@ -86,7 +86,7 @@ pub const AtomBase = extern struct {
     }
 
     // Get a pointer to the ObserverPool from the manager on the type.
-    pub fn dynamicObserverPool(self: *Self) ?*ObserverPool {
+    pub fn dynamicObserverPool(self: Self) ?*ObserverPool {
         if (self.info.has_observers) {
             const meta: *AtomMeta = @ptrCast(self.typeref());
             return meta.pool_manager.?.get(self.info.pool_index);
@@ -95,13 +95,13 @@ pub const AtomBase = extern struct {
     }
 
     // Get a pointer to the static observer pool
-    pub fn staticObserverPool(self: *Self) ?*ObserverPool {
+    pub fn staticObserverPool(self: Self) ?*ObserverPool {
         const meta: *AtomMeta = @ptrCast(self.typeref());
         return meta.static_observers;
     }
 
     // Type check the given object. This assumes the module was initialized
-    pub fn check(obj: *Object) bool {
+    pub fn check(obj: *const Object) bool {
         return obj.typeCheck(TypeObject.?);
     }
 
@@ -279,6 +279,10 @@ pub const AtomBase = extern struct {
 
     pub fn sizeof(self: *Self) ?*Object {
         var size: usize = @sizeOf(Self);
+        if (self.info.slot_count > 1) {
+            // One slot is already counted for in AtomBase
+            size += (self.info.slot_count - 1) * @sizeOf(?*Object);
+        }
         if (self.dynamicObserverPool()) |pool| {
             size += pool.sizeof();
         }
@@ -343,6 +347,11 @@ pub const AtomBase = extern struct {
         return 0;
     }
 
+    const getset = [_]py.GetSetDef{
+        //.{ .name = "__slots__", .get = @ptrCast(&get_type_slots), .set = null, .doc = "Type slots" },
+        .{} // sentinel
+    };
+
     const methods = [_]py.MethodDef{
         .{ .ml_name = "get_member", .ml_meth = @constCast(@ptrCast(&get_member)), .ml_flags = py.c.METH_CLASS | py.c.METH_O, .ml_doc = "Get the atom member with the given name" },
         .{ .ml_name = "members", .ml_meth = @constCast(@ptrCast(&get_members)), .ml_flags = py.c.METH_CLASS | py.c.METH_NOARGS, .ml_doc = "Get atom members" },
@@ -354,6 +363,7 @@ pub const AtomBase = extern struct {
         .{ .ml_name = "__sizeof__", .ml_meth = @constCast(@ptrCast(&sizeof)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Get size of object in memory in bytes" },
         .{}, // sentinel
     };
+
     const type_slots = [_]py.TypeSlot{
         .{ .slot = py.c.Py_tp_new, .pfunc = @constCast(@ptrCast(&new)) },
         .{ .slot = py.c.Py_tp_init, .pfunc = @constCast(@ptrCast(&init)) },
@@ -361,6 +371,8 @@ pub const AtomBase = extern struct {
         .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
         .{ .slot = py.c.Py_tp_clear, .pfunc = @constCast(@ptrCast(&clear)) },
         .{ .slot = py.c.Py_tp_methods, .pfunc = @constCast(@ptrCast(&methods)) },
+        //.{ .slot = py.c.Py_tp_members, .pfunc = @constCast(@ptrCast(&type_members)) },
+        // .{ .slot = py.c.Py_tp_getset, .pfunc = @constCast(@ptrCast(&getset)) },
         .{}, // sentinel
     };
     pub var TypeSpec = py.TypeSpec{
@@ -394,16 +406,18 @@ comptime {
 }
 // Generate a type that extends the AtomBase with inlined slots
 pub fn Atom(comptime slot_count: u16) type {
-    if (slot_count < 2) {
-        @compileError("Cannot create an AtomBase subclass with < 2 slots. Use the AtomBase instead");
+    if (slot_count < 1) {
+        @compileError("Cannot create an AtomBase subclass with < 1 slot. Use the AtomBase instead");
+
     }
-    return extern struct {
+    const extra_slots = slot_count - 1;
+    const AtomSubclass = extern struct {
         // Reference to the type. This is set in ready
         pub var TypeObject: ?*Type = null;
         const Self = @This();
 
         base: AtomBase,
-        slots: [slot_count]?*Object,
+        slots: [extra_slots]?*Object,
 
         comptime {
             // Check that alignment of base and this class's slots are correct
@@ -418,7 +432,7 @@ pub fn Atom(comptime slot_count: u16) type {
         pub usingnamespace py.ObjectProtocol(@This());
 
         // Type check the given object. This assumes the module was initialized
-        pub fn check(obj: *Object) bool {
+        pub fn check(obj: *const Object) bool {
             return obj.typeCheck(TypeObject.?);
         }
 
@@ -448,6 +462,15 @@ pub fn Atom(comptime slot_count: u16) type {
             py.clear(&TypeObject);
         }
     };
+
+    comptime {
+        const size = @sizeOf(AtomSubclass);
+        const expected = @sizeOf(AtomBase) + extra_slots * @sizeOf(?*Object);
+        if (size != expected) {
+            @compileError(std.fmt.comptimePrint("AtomSubclass size expected {} bytes got {}", .{expected, size}));
+        }
+    }
+    return AtomSubclass;
 }
 
 pub fn initModule(mod: *py.Module) !void {

@@ -29,6 +29,7 @@ pub const AtomMeta = extern struct {
     const Self = @This();
 
     base: Metaclass,
+    __slots__: ?*Object = null,
     atom_members: ?*AtomMembers = null,
     pool_manager: ?*PoolManager = null,
     static_observers: ?*ObserverPool = null,
@@ -37,17 +38,12 @@ pub const AtomMeta = extern struct {
     // Import the object protocol
     pub usingnamespace py.ObjectProtocol(@This());
 
-    pub inline fn check(obj: *Object) bool {
+    pub inline fn check(obj: *const Object) bool {
         return obj.typeCheck(TypeObject.?);
     }
 
     // Create an AtomBase subclass
     pub fn new(_: *AtomMeta, args: *Tuple, kwargs: ?*Dict) ?*Object {
-        // Any uses of custom tp_new in this function will cause python to error out
-        // so temporarily swap it back to the default
-        AtomMeta.disableNew();
-        defer AtomMeta.enableNew();
-
         // name, bases, dct
         const kwlist = [_:null][*c]const u8{
             "name",
@@ -58,7 +54,7 @@ pub const AtomMeta = extern struct {
         var name: *Str = undefined;
         var bases: *Tuple = undefined;
         var dict: *Dict = undefined;
-        var enable_weakrefs: bool = undefined;
+        var enable_weakrefs: bool = false;
         py.parseTupleAndKeywords(args, kwargs, "UOO|p", @ptrCast(&kwlist), .{ &name, &bases, &dict, &enable_weakrefs }) catch return null;
         if (!bases.typeCheckExactSelf()) {
             return py.typeErrorObject(null, "AtomMeta's 2nd arg must be a tuple", .{});
@@ -159,7 +155,13 @@ pub const AtomMeta = extern struct {
         } // else no change needed
 
         // Create a new subclass
-        const cls: *AtomMeta = @ptrCast(Type.new(TypeObject.?, name, bases, dict) catch return null);
+        const cls: *AtomMeta = blk: {
+            // Any uses of custom tp_new in this function will cause python to error out
+            // so temporarily swap it back to the default
+            AtomMeta.disableNew();
+            defer AtomMeta.enableNew();
+            break :blk @ptrCast(Type.new(TypeObject.?, name, bases, dict) catch return null);
+        };
         var ok: bool = false;
         defer if (!ok) cls.decref();
         if (cls.set_atom_members(members, null) < 0) {
@@ -198,16 +200,12 @@ pub const AtomMeta = extern struct {
             }
             old.clearRetainingCapacity();
         } else {
-            const ptr = py.allocator.create(AtomMembers) catch {
-                py.memoryError() catch return -1;
-            };
+            const ptr = py.allocator.create(AtomMembers) catch return py.memoryErrorObject(-1);
             ptr.* = .{};
             self.atom_members = ptr;
         }
         const members_array = self.atom_members.?;
-        members_array.ensureTotalCapacity(py.allocator, member_count) catch {
-            py.memoryError() catch return -1;
-        };
+        members_array.ensureTotalCapacity(py.allocator, member_count) catch return py.memoryErrorObject(-1);
         var pos: isize = 0;
         while (members.next(&pos)) |entry| {
             // Assign the owner and copy into our array
@@ -219,17 +217,16 @@ pub const AtomMeta = extern struct {
     }
 
     pub fn get_member(self: *Self, name: *Object) ?*Object {
-        if (!Str.check(name)) {
+        if (!Str.check(name))
             return py.typeErrorObject(null, "Invalid arguments: Signature is get_member(name: str)", .{});
-        }
         const member_name: *Str = @ptrCast(name);
         if (self.atom_members) |members| {
             for (members.items) |member| {
                 // Since names are interned they can be compared with pointers
-                if (member.name == member_name) {
+                if (member.name == member_name)
                     return @ptrCast(member.newref());
-                }
             }
+            return py.returnNone();
         }
         return py.systemErrorObject(null, "Members are not initialized", .{});
     }
@@ -244,21 +241,18 @@ pub const AtomMeta = extern struct {
     // Validate the atom members dict and return the number of members
     pub fn validateMembers(self: *Self, members: *Dict) !u16 {
         _ = self;
-        if (!members.typeCheckSelf()) {
+        if (!members.typeCheckSelf())
             try py.typeError("atom members must be a dict", .{});
-        }
+
         var pos: isize = 0;
         while (members.next(&pos)) |item| {
-            if (!Str.check(item.key)) {
+            if (!Str.check(item.key))
                 try py.typeError("atom members keys must strings", .{});
-            }
-            if (!MemberBase.check(item.value)) {
+            if (!MemberBase.check(item.value))
                 try py.typeError("atom members values must Member", .{});
-            }
         }
-        if (pos < 0 or pos > 0xffff) {
+        if (pos < 0 or pos > 0xffff)
             try py.typeError("atom member limit reached", .{});
-        }
         return @intCast(pos);
     }
 
@@ -282,10 +276,6 @@ pub const AtomMeta = extern struct {
     }
 
     pub fn traverse(self: *Self, visit: py.visitproc, arg: ?*anyopaque) c_int {
-        if (self.pool_manager) |mgr| {
-            return mgr.traverse(visit, arg);
-        }
-        //return py.visit(self.atom_members, visit, arg);
         if (self.atom_members) |members| {
             for (members.items) |member| {
                 const r = py.visit(member, visit, arg);
@@ -293,6 +283,11 @@ pub const AtomMeta = extern struct {
                     return r;
             }
 
+        }
+        if (self.pool_manager) |mgr| {
+            const r = mgr.traverse(visit, arg);
+            if (r != 0)
+                return r;
         }
         return 0;
     }
@@ -315,12 +310,14 @@ pub const AtomMeta = extern struct {
         .{}, // sentinel
     };
 
+
     const type_slots = [_]py.TypeSlot{
         .{ .slot = py.c.Py_tp_new, .pfunc = @constCast(@ptrCast(&new)) },
         .{ .slot = py.c.Py_tp_dealloc, .pfunc = @constCast(@ptrCast(&dealloc)) },
         .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
         .{ .slot = py.c.Py_tp_clear, .pfunc = @constCast(@ptrCast(&clear)) },
         // .{ .slot = py.c.Py_tp_methods, .pfunc = @constCast(@ptrCast(&methods)) },
+        //.{ .slot = py.c.Py_tp_members, .pfunc = @constCast(@ptrCast(&tp_members)) },
         .{ .slot = py.c.Py_tp_getset, .pfunc = @constCast(@ptrCast(&getset)) },
         .{}, // sentinel
     };
