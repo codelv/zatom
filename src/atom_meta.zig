@@ -25,10 +25,9 @@ const package_name = @import("api.zig").package_name;
 pub const AtomMeta = extern struct {
     // Reference to the type. This is set in ready
     pub var TypeObject: ?*Type = null;
-    pub const BaseType = Metaclass.BaseType;
     const Self = @This();
 
-    base: BaseType,
+    base: Metaclass,
     atom_members: ?*Dict = null,
     pool_manager: ?*PoolManager = null,
     static_observers: ?*ObserverPool = null,

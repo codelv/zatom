@@ -33,10 +33,6 @@ pub const BoolMember = Member("Bool", struct {
         return py.returnFalse();
     }
 
-    comptime {
-        std.debug.assert(@sizeOf(*usize) == @sizeOf(*Object));
-    }
-
     pub inline fn writeSlot(_: *MemberBase, _: *AtomBase, value: *Object) py.Error!usize {
         return @intFromBool(value == py.True());
     }

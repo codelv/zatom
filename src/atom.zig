@@ -44,8 +44,7 @@ pub const AtomBase = extern struct {
     const Self = @This();
     // Reference to the type. This is set in ready
     pub var TypeObject: ?*Type = null;
-    pub const BaseType = Object.BaseType;
-    base: BaseType,
+    base: Object,
     info: AtomInfo,
     slots: [1]?*Object,
 
@@ -427,10 +426,9 @@ pub fn Atom(comptime slot_count: u16) type {
     return extern struct {
         // Reference to the type. This is set in ready
         pub var TypeObject: ?*Type = null;
-        pub const BaseType = AtomBase;
         const Self = @This();
 
-        base: BaseType,
+        base: AtomBase,
         slots: [slot_count]?*Object,
 
         comptime {

@@ -51,10 +51,9 @@ pub const MemberInfo = packed struct {
 pub const MemberBase = extern struct {
     // Reference to the type. This is set in ready
     pub var TypeObject: ?*Type = null;
-    pub const BaseType = Object.BaseType;
     const Self = @This();
 
-    base: BaseType,
+    base: Object,
     metadata: ?*Dict = null,
     default_context: ?*Object = null,
     validate_context: ?*Object = null,
@@ -610,13 +609,12 @@ pub const MemberBase = extern struct {
 pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
     return extern struct {
         pub var TypeObject: ?*Type = null;
-        pub const BaseType = MemberBase;
         pub const TypeName = type_name;
         pub const Impl = impl;
         pub const storage_mode: StorageMode = if (@hasDecl(impl, "storage_mode")) impl.storage_mode else .pointer;
         const Self = @This();
 
-        base: BaseType,
+        base: MemberBase,
 
         // Import the object protocol
         pub usingnamespace py.ObjectProtocol(@This());

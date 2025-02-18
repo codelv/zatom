@@ -24,8 +24,7 @@ pub const EventBinder = extern struct {
     const Self = @This();
     // Reference to the type. This is set in ready
     pub var TypeObject: ?*py.Type = null;
-    pub const BaseType = Object.BaseType;
-    base: BaseType,
+    base: Object,
     atom: *AtomBase,
     member: *EventMember,
 
