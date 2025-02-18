@@ -95,10 +95,7 @@ pub const TypedMember = Member("Typed", struct {
     }
 });
 
-pub const ForwardTypedMember = Member("ForwardTyped", struct {
-
-
-});
+pub const ForwardTypedMember = Member("ForwardTyped", struct {});
 
 const all_types = .{
     TypedMember,

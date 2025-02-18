@@ -25,12 +25,15 @@ const package_name = @import("api.zig").package_name;
 pub const AtomMeta = extern struct {
     // Reference to the type. This is set in ready
     pub var TypeObject: ?*Type = null;
+    const ManagedMembers = std.ArrayListUnmanaged(*MemberBase);
     const Self = @This();
 
     base: Metaclass,
     atom_members: ?*Dict = null,
     pool_manager: ?*PoolManager = null,
     static_observers: ?*ObserverPool = null,
+    // Members that require GC
+    gc_members: ?*ManagedMembers = null,
     slot_count: u16 = 0,
 
     // Import the object protocol
@@ -211,11 +214,30 @@ pub const AtomMeta = extern struct {
         const count = self.validate_atom_members(members) catch return -1;
         py.setref(@ptrCast(&self.atom_members), @ptrCast(members.newref()));
         self.slot_count = count;
+
+        if (self.gc_members) |old| {
+            old.clearRetainingCapacity();
+        } else {
+            const ptr = py.allocator.create(ManagedMembers) catch {
+                _ = py.memoryError();
+                return -1;
+            };
+            ptr.* = .{};
+            self.gc_members = ptr;
+        }
+        const managed_members = self.gc_members.?;
         var pos: isize = 0;
+
         while (members.next(&pos)) |entry| {
             // Assign the owner
             const member: *MemberBase = @ptrCast(entry.value);
-            member.owner = self;
+            member.owner = self.newref();
+            if (member.info.storage_mode == .pointer) {
+                managed_members.append(py.allocator, member) catch {
+                    _ = py.memoryError();
+                    return -1;
+                };
+            }
         }
         return 0;
     }
@@ -242,6 +264,10 @@ pub const AtomMeta = extern struct {
         if (self.pool_manager) |mgr| {
             mgr.deinit(py.allocator);
             self.pool_manager = null;
+        }
+        if (self.gc_members) |members| {
+            members.deinit(py.allocator);
+            self.gc_members = null;
         }
         return 0;
     }

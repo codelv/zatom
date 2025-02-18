@@ -27,12 +27,10 @@ pub fn MethodWrapper(comptime T: type) type {
 
         pub fn new(cls: *Type, args: *Tuple, _: ?*Dict) ?*Self {
             var method: *py.Method = undefined;
-            args.parseTyped(.{ &method }) catch return null;
+            args.parseTyped(.{&method}) catch return null;
             const self: *Self = @ptrCast(cls.genericNew(null, null) catch return null);
             if (method.getSelf()) |self| {
-                if (T.check(self)) {
-
-                }
+                if (T.check(self)) {}
             } else {
                 return py.typeError("Cannot wrap unbound method", .{});
             }
@@ -126,10 +124,7 @@ pub fn MethodWrapper(comptime T: type) type {
     };
 }
 
-const all_types = .{
-    MethodWrapper(Object),
-    MethodWrapper(AtomBase)
-};
+const all_types = .{ MethodWrapper(Object), MethodWrapper(AtomBase) };
 
 pub fn initModule(_: *py.Module) !void {
     inline for (all_types) |T| {

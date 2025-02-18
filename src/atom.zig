@@ -302,41 +302,24 @@ pub const AtomBase = extern struct {
         _ = self.clear();
         if (self.dynamicObserverPool() != null) {
             const meta: *AtomMeta = @ptrCast(self.typeref());
-            meta.pool_manager.?.release(py.allocator, self.info.pool_index) catch {
-                _ = py.memoryError();
-                // TODO: This is bad
-            };
-            self.info.has_observers = false;
+            meta.pool_manager.?.release(py.allocator, self.info.pool_index) catch {};
         }
         self.typeref().free(@ptrCast(self));
     }
 
     pub fn clear(self: *Self) c_int {
         if (self.dynamicObserverPool()) |pool| {
-            pool.clear(py.allocator) catch |err| {
-                switch (err) {
-                    error.OutOfMemory => {
-                        _ = py.memoryError();
-                    },
-                    //error.PyError => {},
-                }
-                return -1;
-            };
+            pool.clear(py.allocator) catch return -1;
         }
-        return self.clearMemberSlots();
-    }
 
-    // Since some members fill slots with other data, the slot might not be a *Object
-    // so instead of using py.clear we delegate clearing to the members themselves.
-    fn clearMemberSlots(self: *Self) c_int {
+        // Since some members fill slots with other data, the slot might not be a *Object
+        // so instead of using py.clear we delegate clearing to the members themselves.
         const meta: *AtomMeta = @ptrCast(self.typeref());
         std.debug.assert(meta.typeCheckSelf());
-        if (meta.atom_members) |members| {
-            var pos: isize = 0;
-            // TODO: dict iteration is not thread safe
-            while (members.next(&pos)) |entry| {
-                const member: *MemberBase = @ptrCast(entry.value);
-                member.clearSlot(self);
+        if (meta.gc_members) |members| {
+            for (members.items) |member| {
+                @setRuntimeSafety(false);
+                py.clear(&self.slots[member.info.index]);
             }
         }
         return 0;
@@ -349,18 +332,12 @@ pub const AtomBase = extern struct {
             if (r != 0)
                 return r;
         }
-        return self.traverseMemberSlots(visit, arg);
-    }
-
-    fn traverseMemberSlots(self: *Self, visit: py.visitproc, arg: ?*anyopaque) c_int {
         const meta: *AtomMeta = @ptrCast(self.typeref());
         std.debug.assert(meta.typeCheckSelf());
-        if (meta.atom_members) |members| {
-            var pos: isize = 0;
-            // TODO: dict iteration is not thread safe
-            while (members.next(&pos)) |entry| {
-                const member: *MemberBase = @ptrCast(entry.value);
-                const r = member.visitSlot(self, visit, arg);
+        if (meta.gc_members) |members| {
+            for (members.items) |member| {
+                @setRuntimeSafety(false);
+                const r = py.visit(self.slots[member.info.index], visit, arg);
                 if (r != 0)
                     return r;
             }

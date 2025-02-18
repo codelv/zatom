@@ -362,9 +362,12 @@ pub const ObserverPool = struct {
 
     // Remove all observers from the pool. If the pool is guarded
     // by a modification guard this may require allocation.
-    pub fn clear(self: *ObserverPool, allocator: std.mem.Allocator) !void {
+    pub fn clear(self: *ObserverPool, allocator: std.mem.Allocator) py.Error!void {
         if (self.guard) |guard| {
-            try guard.mods.append(.{ .clear = self });
+            guard.mods.append(.{ .clear = self }) catch {
+                _ = py.memoryError();
+                return error.PyError;
+            };
             return;
         }
         var topics = self.map.valueIterator();

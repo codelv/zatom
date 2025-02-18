@@ -315,7 +315,6 @@ pub const MemberBase = extern struct {
             break :blk @intFromEnum(ChangeType.any);
         };
 
-
         if (self.staticObservers()) |pool| {
             pool.addObserver(py.allocator, self.name, observer, change_types) catch return null;
         }
@@ -520,25 +519,6 @@ pub const MemberBase = extern struct {
             &self.validate_context,
             &self.coercer_context,
         });
-        return 0;
-    }
-
-    // AtomBase uses this to selectively clear slots
-    pub fn clearSlot(self: *Self, atom: *AtomBase) void {
-        if (self.info.storage_mode == .pointer) {
-            if (atom.slotPtr(self.info.index)) |ptr| {
-                py.clear(ptr);
-            }
-        }
-    }
-
-    // AtomBase uses this to selectively visit slots
-    pub fn visitSlot(self: *Self, atom: *AtomBase, visit: py.visitproc, arg: ?*anyopaque) c_int {
-        if (self.info.storage_mode == .pointer) {
-            if (atom.slotPtr(self.info.index)) |ptr| {
-                return py.visit(ptr.*, visit, arg);
-            }
-        }
         return 0;
     }
 
