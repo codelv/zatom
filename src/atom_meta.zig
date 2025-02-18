@@ -1,4 +1,4 @@
-const py = @import("py.zig");
+const py = @import("api.zig").py;
 const std = @import("std");
 const Type = py.Type;
 const Metaclass = py.Metaclass;
@@ -41,33 +41,6 @@ pub const AtomMeta = extern struct {
         return obj.typeCheck(TypeObject.?);
     }
 
-    // Validate the atom members dict
-    pub fn validate_atom_members(self: *Self, members: *Dict) !u16 {
-        _ = self;
-        if (!members.typeCheckSelf()) {
-            _ = py.typeError("atom members must be a dict", .{});
-            return error.PyError;
-        }
-        var pos: isize = 0;
-        var count: usize = 0;
-        while (members.next(&pos)) |item| {
-            if (!Str.check(item.key)) {
-                _ = py.typeError("atom members keys must strings", .{});
-                return error.PyError;
-            }
-            if (!MemberBase.check(item.value)) {
-                _ = py.typeError("atom members values must Member", .{});
-                return error.PyError;
-            }
-            count += 1;
-        }
-        if (count > 0xffff) {
-            _ = py.typeError("atom member limit reached", .{});
-            return error.PyError;
-        }
-        return @intCast(count);
-    }
-
     // Create an AtomBase subclass
     pub fn new(_: *AtomMeta, args: *Tuple, kwargs: ?*Dict) ?*Object {
         // Any uses of custom tp_new in this function will cause python to error out
@@ -88,10 +61,10 @@ pub const AtomMeta = extern struct {
         var enable_weakrefs: bool = undefined;
         py.parseTupleAndKeywords(args, kwargs, "UOO|p", @ptrCast(&kwlist), .{ &name, &bases, &dict, &enable_weakrefs }) catch return null;
         if (!bases.typeCheckExactSelf()) {
-            return py.typeError("AtomMeta's 2nd arg must be a tuple", .{});
+            return py.typeErrorObject(null, "AtomMeta's 2nd arg must be a tuple", .{});
         }
         if (!dict.typeCheckExactSelf()) {
-            return py.typeError("AtomMeta's 3rd arg must be a dict", .{});
+            return py.typeErrorObject(null, "AtomMeta's 3rd arg must be a dict", .{});
         }
 
         const has_slots = dict.contains(@ptrCast(slots_str.?)) catch return null;
@@ -158,13 +131,12 @@ pub const AtomMeta = extern struct {
         // Modify the bases to
         const num_bases = bases.size() catch return null;
         if (num_bases == 0) {
-            _ = py.typeError("AtomMeta must contain AtomBase", .{});
-            return null;
+            return py.typeErrorObject(null, "AtomMeta must contain AtomBase", .{});
         }
 
         const base = bases.get(0) catch return null; // Borrowed
         if (!base.is(AtomBase.TypeObject)) {
-            return py.typeError("AtomMeta must contain AtomBase", .{});
+            return py.typeErrorObject(null, "AtomMeta must contain AtomBase", .{});
         }
 
         // Set to true if bases is redefined and we need to decref it
@@ -183,7 +155,7 @@ pub const AtomMeta = extern struct {
                 bases.set(0, @ptrCast(slot_base.newref())) catch return null;
             }
         } else if (slot_count >= atom.atom_types.len) {
-            return py.typeError("TODO: Dynamic slots", .{});
+            return py.typeErrorObject(null, "TODO: Dynamic slots", .{});
         } // else no change needed
 
         // Create a new subclass
@@ -193,6 +165,7 @@ pub const AtomMeta = extern struct {
         if (cls.set_atom_members(members, null) < 0) {
             return null;
         }
+        cls.slot_count = @intCast(slot_count);
         cls.pool_manager = PoolManager.new(py.allocator) catch return null;
         defer if (!ok) cls.pool_manager.?.deinit(py.allocator);
         ok = true;
@@ -212,13 +185,12 @@ pub const AtomMeta = extern struct {
             ok = true;
             return @ptrCast(dict);
         }
-        return py.systemError("AtomMeta members were not initialized", .{});
+        return py.systemErrorObject(null, "AtomMeta members were not initialized", .{});
     }
 
     pub fn set_atom_members(self: *Self, members: *Dict, _: ?*anyopaque) c_int {
-        const count = self.validate_atom_members(members) catch return -1;
+        const member_count = self.validateMembers(members) catch return -1;
         //py.setref(@ptrCast(&self.atom_members), @ptrCast(members.newref()));
-        self.slot_count = count;
 
         if (self.atom_members) |old| {
             for (old.items) |member| {
@@ -227,29 +199,28 @@ pub const AtomMeta = extern struct {
             old.clearRetainingCapacity();
         } else {
             const ptr = py.allocator.create(AtomMembers) catch {
-                _ = py.memoryError();
-                return -1;
+                py.memoryError() catch return -1;
             };
             ptr.* = .{};
             self.atom_members = ptr;
         }
         const members_array = self.atom_members.?;
+        members_array.ensureTotalCapacity(py.allocator, member_count) catch {
+            py.memoryError() catch return -1;
+        };
         var pos: isize = 0;
         while (members.next(&pos)) |entry| {
             // Assign the owner and copy into our array
             const member: *MemberBase = @ptrCast(entry.value);
             py.xsetref(@ptrCast(&member.owner), @ptrCast(self.newref()));
-            members_array.append(py.allocator, member.newref()) catch {
-                _ = py.memoryError();
-                return -1;
-            };
+            members_array.appendAssumeCapacity(member.newref());
         }
         return 0;
     }
 
     pub fn get_member(self: *Self, name: *Object) ?*Object {
         if (!Str.check(name)) {
-            return py.typeError("Invalid arguments: Signature is get_member(name: str)", .{});
+            return py.typeErrorObject(null, "Invalid arguments: Signature is get_member(name: str)", .{});
         }
         const member_name: *Str = @ptrCast(name);
         if (self.atom_members) |members| {
@@ -260,11 +231,35 @@ pub const AtomMeta = extern struct {
                 }
             }
         }
-        return py.systemError("Members are not initialized", .{});
+        return py.systemErrorObject(null, "Members are not initialized", .{});
     }
 
     pub fn get_slot_count(self: *Self) ?*Int {
         return Int.new(self.slot_count) catch return null;
+    }
+
+    // --------------------------------------------------------------------------
+    // Internal api
+    // --------------------------------------------------------------------------
+    // Validate the atom members dict and return the number of members
+    pub fn validateMembers(self: *Self, members: *Dict) !u16 {
+        _ = self;
+        if (!members.typeCheckSelf()) {
+            try py.typeError("atom members must be a dict", .{});
+        }
+        var pos: isize = 0;
+        while (members.next(&pos)) |item| {
+            if (!Str.check(item.key)) {
+                try py.typeError("atom members keys must strings", .{});
+            }
+            if (!MemberBase.check(item.value)) {
+                try py.typeError("atom members values must Member", .{});
+            }
+        }
+        if (pos < 0 or pos > 0xffff) {
+            try py.typeError("atom member limit reached", .{});
+        }
+        return @intCast(pos);
     }
 
     // --------------------------------------------------------------------------

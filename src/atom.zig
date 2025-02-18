@@ -1,4 +1,4 @@
-const py = @import("py.zig");
+const py = @import("api.zig").py;
 const std = @import("std");
 const Type = py.Type;
 const Object = py.Object;
@@ -52,7 +52,7 @@ pub const AtomBase = extern struct {
 
     pub fn new(cls: *Type, args: *Tuple, kwargs: ?*Dict) ?*Self {
         if (!AtomMeta.check(@ptrCast(cls))) {
-            return @ptrCast(py.typeError("atom meta", .{}));
+            return py.typeError("atom meta", .{}) catch null;
         }
         const self: *Self = @ptrCast(cls.genericNew(args, kwargs) catch return null);
         const meta: *AtomMeta = @ptrCast(cls);
@@ -62,8 +62,7 @@ pub const AtomBase = extern struct {
 
     pub fn init(self: *Self, args: *Tuple, kwargs: ?*Dict) c_int {
         if (args.sizeUnchecked() > 0) {
-            _ = py.typeError("__init__() takes no positional arguments", .{});
-            return -1;
+            return py.typeError("__init__() takes no positional arguments", .{}) catch -1;
         }
         if (kwargs) |kw| {
             var pos: isize = 0;
@@ -145,15 +144,7 @@ pub const AtomBase = extern struct {
             self.info.has_observers = true;
         }
         const pool = self.dynamicObserverPool().?;
-        pool.addObserver(py.allocator, topic, observer, change_types) catch |err| {
-            switch (err) {
-                error.PyError => {},
-                error.OutOfMemory => {
-                    _ = py.memoryError();
-                },
-            }
-            return error.PyError;
-        };
+        try pool.addObserver(py.allocator, topic, observer, change_types);
     }
 
     pub fn removeDynamicObserver(self: *Self, topic: *Str, observer: *Object) !void {
@@ -196,12 +187,12 @@ pub const AtomBase = extern struct {
         if (n == 1 and Str.check(args[0])) {
             return py.returnBool(self.hasDynamicObservers(@ptrCast(args[0])) catch return null);
         }
-        return py.typeError("Invalid arguments. Signature is has_observers(topic: Optional[str] = None)", .{});
+        return py.typeErrorObject(null, "Invalid arguments. Signature is has_observers(topic: Optional[str] = None)", .{});
     }
 
     pub fn has_observer(self: *Self, args: [*]*Object, n: isize) ?*Object {
         if (n != 2 or !Str.check(args[0]) or !args[1].isCallable()) {
-            return py.typeError("Invalid arguments. Signature is has_observer(topic: str, observer: Callable)", .{});
+            return py.typeErrorObject(null, "Invalid arguments. Signature is has_observer(topic: str, observer: Callable)", .{});
         }
         return py.returnBool(self.hasDynamicObserver(@ptrCast(args[0]), args[1]) catch return null);
     }
@@ -209,7 +200,7 @@ pub const AtomBase = extern struct {
     pub fn observe(self: *Self, args: [*]*Object, n: isize) ?*Object {
         const msg = "Invalid arguments. Signature is observe(topics: str | Iterable[str], observer: Callable, change_types: int=0xff)";
         if (n < 2 or n > 3 or !args[1].isCallable()) {
-            return py.typeError(msg, .{});
+            return py.typeErrorObject(null, msg, .{});
         }
         const topic = args[0];
         const callback = args[1];
@@ -217,7 +208,7 @@ pub const AtomBase = extern struct {
             if (n == 3) {
                 const v = args[2];
                 if (!Int.check(v)) {
-                    return py.typeError(msg, .{});
+                    return py.typeErrorObject(null, msg, .{});
                 }
                 break :blk Int.as(@ptrCast(v), u8) catch return null;
             }
@@ -230,7 +221,7 @@ pub const AtomBase = extern struct {
             while (iter.next() catch return null) |item| {
                 defer item.decref();
                 if (!Str.check(item)) {
-                    return py.typeError(msg, .{});
+                    return py.typeErrorObject(null, msg, .{});
                 }
                 self.addDynamicObserver(@ptrCast(item), callback, change_types) catch return null;
             }
@@ -254,13 +245,13 @@ pub const AtomBase = extern struct {
             },
             else => {},
         }
-        return py.typeError("Invalid arguments. Signature is unobserve(topic: Optional[str]=None, observer: Optional[Callable]=None)", .{});
+        return py.typeErrorObject(null, "Invalid arguments. Signature is unobserve(topic: Optional[str]=None, observer: Optional[Callable]=None)", .{});
     }
 
     pub fn notify(self: *Self, args: *Tuple, kwargs: ?*Dict) ?*Object {
         const n = args.size() catch return null;
         if (n < 1 or !Str.check(args.getUnsafe(0).?)) {
-            return py.typeError("Invalid arguments. Signature is notify(topic: str, *args, **kwargs)", .{});
+            return py.typeErrorObject(null, "Invalid arguments. Signature is notify(topic: str, *args, **kwargs)", .{});
         }
         const topic: *Str = @ptrCast(args.getUnsafe(0).?);
         const new_args = args.slice(1, n) catch return null;
@@ -271,7 +262,7 @@ pub const AtomBase = extern struct {
     pub fn get_member(cls: *Object, name: *Object) ?*Object {
         if (!AtomMeta.check(@ptrCast(cls))) {
             // @branchHint(.cold);
-            return py.typeError("Atom must be defined with AtomMeta as a metatype", .{});
+            return py.typeErrorObject(null, "Atom must be defined with AtomMeta as a metatype", .{});
         }
         const meta: *AtomMeta = @ptrCast(cls);
         return meta.get_member(name);
@@ -280,7 +271,7 @@ pub const AtomBase = extern struct {
     pub fn get_members(cls: *Object) ?*Object {
         if (!AtomMeta.check(@ptrCast(cls))) {
             // @branchHint(.cold);
-            return py.typeError("Atom must be defined with AtomMeta as a metatype", .{});
+            return py.typeErrorObject(null, "Atom must be defined with AtomMeta as a metatype", .{});
         }
         const meta: *AtomMeta = @ptrCast(cls);
         return meta.get_atom_members();
@@ -382,8 +373,7 @@ pub const AtomBase = extern struct {
     pub fn initType() !void {
         if (TypeObject != null) return;
         if (AtomMeta.TypeObject == null) {
-            _ = py.systemError("AtomMeta type not ready", .{});
-            return error.PyError;
+            return py.systemError("AtomMeta type not ready", .{});
         }
         // Hack to bypass the metaclass check
         AtomMeta.disableNew();

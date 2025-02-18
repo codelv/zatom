@@ -1,4 +1,4 @@
-const py = @import("../py.zig");
+const py = @import("../api.zig").py;
 const std = @import("std");
 const Object = py.Object;
 const Tuple = py.Tuple;
@@ -25,8 +25,7 @@ pub const TupleMember = Member("Tuple", struct {
             if (Tuple.check(default_value.?)) {
                 self.default_context = default_value.?.newref();
             } else {
-                _ = py.typeError("Tuple default must be a tuple", .{});
-                return error.PyError;
+                return py.typeError("Tuple default must be a tuple", .{});
             }
         } else {
             self.default_context = @ptrCast(try Tuple.new(0));

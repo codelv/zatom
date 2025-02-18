@@ -1,4 +1,4 @@
-const py = @import("../py.zig");
+const py = @import("../api.zig").py;
 const std = @import("std");
 const Object = py.Object;
 const Type = py.Type;
@@ -47,11 +47,11 @@ pub const EventBinder = extern struct {
 
     pub fn call(self: *Self, args: *Tuple, kwargs: ?*Dict) ?*Object {
         if (kwargs != null and kwargs.?.sizeUnchecked() > 0) {
-            return py.typeError("An event cannot be triggered with keyword arguments", .{});
+            py.typeError("An event cannot be triggered with keyword arguments", .{}) catch return null;
         }
         const n = args.size() catch return null;
         if (n > 1) {
-            return py.typeError("An event can be triggered with at most 1 argument", .{});
+            py.typeError("An event can be triggered with at most 1 argument", .{}) catch return null;
         }
         const value = if (n == 0) py.None() else args.getUnsafe(0).?;
         EventMember.Impl.setattr(@ptrCast(self.member), self.atom, value) catch return null;
@@ -63,7 +63,7 @@ pub const EventBinder = extern struct {
     // --------------------------------------------------------------------------
     pub fn bind(self: *Self, callback: *Object) ?*Object {
         if (!callback.isCallable()) {
-            return py.typeError("Event callback must be callable", .{});
+            py.typeError("Event callback must be callable", .{}) catch return null;
         }
         const topic = self.member.base.name;
         self.atom.addDynamicObserver(topic, callback, 0xff) catch return null;
@@ -182,8 +182,7 @@ pub const EventMember = Member("Event", struct {
     }
 
     pub fn delattr(_: *MemberBase, _: *AtomBase) !void {
-        _ = py.typeError("cannot delete the value of an event", .{});
-        return error.PyError;
+        return py.typeError("cannot delete the value of an event", .{});
     }
 });
 

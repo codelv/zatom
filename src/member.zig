@@ -1,4 +1,4 @@
-const py = @import("py.zig");
+const py = @import("api.zig").py;
 const std = @import("std");
 const Type = py.Type;
 const Metaclass = py.Metaclass;
@@ -87,8 +87,7 @@ pub const MemberBase = extern struct {
 
     pub fn set_name(self: *Self, value: *Object, _: ?*anyopaque) c_int {
         if (!Str.checkExact(value)) {
-            _ = py.typeError("Member name must be a str", .{});
-            return -1;
+            return py.typeErrorObject(-1, "Member name must be a str", .{});
         }
         py.setref(@ptrCast(&self.name), value.newref());
         Str.internInPlace(@ptrCast(&self.name));
@@ -105,14 +104,12 @@ pub const MemberBase = extern struct {
     pub fn set_index(self: *Self, value: ?*Object, _: ?*anyopaque) c_int {
         if (value) |v| {
             if (!Int.check(v)) {
-                _ = py.typeError("Member index must be an int", .{});
-                return -1;
+                return py.typeErrorObject(-1, "Member index must be an int", .{});
             }
             self.info.index = Int.as(@ptrCast(v), u16) catch return -1;
             return 0;
         }
-        _ = py.typeError("Member index cannot be deleted", .{});
-        return -1;
+        return py.typeErrorObject(-1, "Member index cannot be deleted", .{});
     }
 
     pub fn get_bitsize(self: *Self) ?*Int {
@@ -122,19 +119,16 @@ pub const MemberBase = extern struct {
     pub fn set_bitsize(self: *Self, value: ?*Object, _: ?*anyopaque) c_int {
         if (value) |v| {
             if (!Int.check(v)) {
-                _ = py.typeError("Member bitsize must be an int", .{});
-                return -1;
+                return py.typeErrorObject(-1, "Member bitsize must be an int", .{});
             }
             const n = Int.as(@ptrCast(v), usize) catch return -1;
             if (n == 0 or n > MAX_BITSIZE) {
-                _ = py.typeError("Member bitsize must be between 1 and {}", .{MAX_BITSIZE});
-                return -1;
+                return py.typeErrorObject(-1, "Member bitsize must be between 1 and {}", .{MAX_BITSIZE});
             }
             self.info.width = @intCast(n - 1);
             return 0;
         }
-        _ = py.typeError("Member bitsize cannot be deleted", .{});
-        return -1;
+        return py.typeErrorObject(-1, "Member bitsize cannot be deleted", .{});
     }
 
     pub fn get_offset(self: *Self) ?*Int {
@@ -144,19 +138,16 @@ pub const MemberBase = extern struct {
     pub fn set_offset(self: *Self, value: ?*Object, _: ?*anyopaque) c_int {
         if (value) |v| {
             if (!Int.check(v)) {
-                _ = py.typeError("Member offset must be an int", .{});
-                return -1;
+                return py.typeErrorObject(-1, "Member offset must be an int", .{});
             }
             const n = Int.as(@ptrCast(v), usize) catch return -1;
             if (n > MAX_OFFSET) {
-                _ = py.typeError("Member offset must be between 0 and {}", .{MAX_OFFSET});
-                return -1;
+                return py.typeErrorObject(-1, "Member offset must be between 0 and {}", .{MAX_OFFSET});
             }
             self.info.offset = @intCast(n);
             return 0;
         }
-        _ = py.typeError("Member offset cannot be deleted", .{});
-        return -1;
+        return py.typeErrorObject(-1, "Member offset cannot be deleted", .{});
     }
 
     pub fn get_owner(self: *Self) ?*Object {
@@ -181,8 +172,7 @@ pub const MemberBase = extern struct {
             py.xsetref(@ptrCast(&self.metadata), value);
             return 0;
         }
-        _ = py.typeError("Member metadata must be a dict or None", .{});
-        return -1;
+        py.typeError("Member metadata must be a dict or None", .{}) catch return -1;
     }
 
     // --------------------------------------------------------------------------
@@ -191,7 +181,7 @@ pub const MemberBase = extern struct {
     pub fn get_slot(self: *Self, atom: *AtomBase) ?*Object {
         if (self.info.storage_mode != .none) {
             if (!atom.typeCheckSelf()) {
-                return py.typeError("Atom", .{});
+                py.typeError("Atom", .{}) catch return null;
             }
             if (atom.slotPtr(self.info.index)) |ptr| {
                 switch (self.info.storage_mode) {
@@ -208,17 +198,17 @@ pub const MemberBase = extern struct {
                 }
             }
         }
-        return py.attributeError("Member has no slot", .{});
+        py.attributeError("Member has no slot", .{}) catch return null;
     }
 
     pub fn set_slot(self: *Self, args: [*]*Object, n: isize) ?*Object {
         if (n != 2) {
-            return py.attributeError("set_slot takes 2 arguments", .{});
+            py.attributeError("set_slot takes 2 arguments", .{}) catch return null;
         }
         if (self.info.storage_mode != .none) {
             const atom: *AtomBase = @ptrCast(args[0]);
             if (!atom.typeCheckSelf()) {
-                return py.typeError("Atom", .{});
+                py.typeError("Atom", .{}) catch return null;
             }
             if (atom.slotPtr(self.info.index)) |ptr| {
                 switch (self.info.storage_mode) {
@@ -227,12 +217,12 @@ pub const MemberBase = extern struct {
                     },
                     .static => {
                         if (!Int.check(args[1])) {
-                            return py.typeError("set_slot requires an int", .{});
+                            py.typeError("set_slot requires an int", .{}) catch return null;
                         }
                         const data = Int.as(@ptrCast(args[1]), usize) catch return null;
                         const max_value = std.math.pow(usize, 2, self.info.width + 1);
                         if (data < 0 or data > max_value) {
-                            return py.typeError("set_slot data out of range 0..{}", .{max_value});
+                            py.typeError("set_slot data out of range 0..{}", .{max_value}) catch return null;
                         }
                         const data_ptr: *usize = @ptrCast(ptr);
                         const data_mask = self.slotDataMask();
@@ -245,13 +235,13 @@ pub const MemberBase = extern struct {
                 return py.returnNone();
             }
         }
-        return py.attributeError("Member has no slot", .{});
+        py.attributeError("Member has no slot", .{}) catch return null;
     }
 
     pub fn del_slot(self: *Self, atom: *AtomBase) ?*Object {
         if (self.info.storage_mode != .none) {
             if (!atom.typeCheckSelf()) {
-                return py.typeError("Atom", .{});
+                return py.typeErrorObject(null, "Atom", .{});
             }
             if (atom.slotPtr(self.info.index)) |ptr| {
                 switch (self.info.storage_mode) {
@@ -267,7 +257,7 @@ pub const MemberBase = extern struct {
                 return py.returnNone();
             }
         }
-        return py.attributeError("Member has no slot", .{});
+        return py.attributeErrorObject(null, "Member has no slot", .{});
     }
 
     pub fn has_observers(self: *Self) ?*Object {
@@ -281,11 +271,11 @@ pub const MemberBase = extern struct {
         const msg = "Invalid arguments. Signature is has_observer(observer: str | Callable, change_types: int = 0xff)";
         var change_types: u8 = 0xff;
         if (n < 1 or n > 2) {
-            return py.typeError(msg, .{});
+            return py.typeErrorObject(null, msg, .{});
         }
         if (n == 2) {
             if (!Int.check(args[1])) {
-                return py.typeError(msg, .{});
+                return py.typeErrorObject(null, msg, .{});
             }
             change_types = Int.as(@ptrCast(args[1]), u8) catch return null;
         }
@@ -298,17 +288,17 @@ pub const MemberBase = extern struct {
     pub fn add_static_observer(self: *Self, args: [*]*Object, n: isize) ?*Object {
         const msg = "Invalid arguments. Signature is add_static_observer(observer: str | Callable, change_types: int = 0xff)";
         if (n < 1 or n < 2) {
-            return py.typeError(msg, .{});
+            return py.typeErrorObject(null, msg, .{});
         }
         const observer = args[0];
         if (!Str.check(observer) and !observer.isCallable()) {
-            return py.typeError(msg, .{});
+            return py.typeErrorObject(null, msg, .{});
         }
         const change_types = blk: {
             if (n == 2) {
                 const v = args[1];
                 if (!Int.check(v)) {
-                    return py.typeError(msg, .{});
+                    return py.typeErrorObject(null, msg, .{});
                 }
                 break :blk Int.as(@ptrCast(v), u8) catch return null;
             }
@@ -335,11 +325,11 @@ pub const MemberBase = extern struct {
     pub fn notify(self: *Self, args: *Tuple, kwargs: ?*Dict) ?*Object {
         const n = args.size() catch return null;
         if (n < 1) {
-            return py.typeError("notify() requires at least 1 argument", .{});
+            return py.typeErrorObject(null, "notify() requires at least 1 argument", .{});
         }
         const atom: *AtomBase = @ptrCast(args.getUnsafe(0).?);
         if (!atom.typeCheckSelf()) {
-            return py.typeError("notify() 1st argument must be an Atom instance", .{});
+            return py.typeErrorObject(null, "notify() 1st argument must be an Atom instance", .{});
         }
         const new_args = args.slice(1, n) catch return null;
         atom.notifyInternal(self.name, new_args, kwargs, @intFromEnum(ChangeType.any)) catch return null;
@@ -348,7 +338,7 @@ pub const MemberBase = extern struct {
 
     pub fn tag(self: *Self, args: *Tuple, kwargs: ?*Dict) ?*Object {
         if (args.sizeUnchecked() != 0) {
-            return py.typeError("tag() takes no positional arguments", .{});
+            return py.typeErrorObject(null, "tag() takes no positional arguments", .{});
         }
         if (kwargs) |kw| {
             if (self.metadata) |metadata| {
@@ -358,7 +348,7 @@ pub const MemberBase = extern struct {
             }
             return @ptrCast(self.newref());
         }
-        return py.typeError("tag() requires keyword arguments", .{});
+        return py.typeErrorObject(null, "tag() requires keyword arguments", .{});
     }
 
     // --------------------------------------------------------------------------
@@ -366,13 +356,12 @@ pub const MemberBase = extern struct {
     // --------------------------------------------------------------------------
     // Helper function for validation failures
     pub fn validateFail(self: *Self, atom: *AtomBase, value: *Object, expected: [:0]const u8) py.Error!void {
-        _ = py.typeError("The '{s}' member on the '{s}' object must be of type '{s}'. Got object of type '{s}' instead", .{
+        return py.typeError("The '{s}' member on the '{s}' object must be of type '{s}'. Got object of type '{s}' instead", .{
             self.name.data(),
             atom.typeName(),
             expected,
             value.typeName(),
         });
-        return error.PyError;
     }
 
     pub fn validateTypeOrTupleOfTypes(self: *Self, kind: *Object) py.Error!void {
@@ -382,23 +371,20 @@ pub const MemberBase = extern struct {
             const kinds: *Tuple = @ptrCast(kind);
             const n = try kinds.size();
             if (n == 0) {
-                _ = py.typeError("{s} kind must be a type or tuple of types. Got an empty tuple", .{self.typeName()});
-                return error.PyError;
+                return py.typeError("{s} kind must be a type or tuple of types. Got an empty tuple", .{self.typeName()});
             }
             for (0..n) |i| {
                 const obj = kinds.getUnsafe(i).?;
                 if (!Type.check(obj)) {
-                    _ = py.typeError("{s} kind must be a type or tuple of types. Got a tuple with '{s}'", .{
+                    return py.typeError("{s} kind must be a type or tuple of types. Got a tuple with '{s}'", .{
                         self.typeName(),
                         obj.typeName(),
                     });
-                    return error.PyError;
                 }
             }
             return;
         } else {
-            _ = py.typeError("{s} kind must be a type or tuple of types. Got an empty tuple", .{self.typeName()});
-            return error.PyError;
+            return py.typeError("{s} kind must be a type or tuple of types. Got an empty tuple", .{self.typeName()});
         }
     }
 
@@ -622,8 +608,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                     if (self.base.default_context) |callable| {
                         return callable.callArgs(.{});
                     } else {
-                        _ = py.systemError("default context missing", .{});
-                        return error.PyError;
+                        return py.systemError("default context missing", .{});
                     }
                 },
             }
@@ -726,8 +711,8 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                 return value.newref();
             } else {
                 // @branchHint(.cold);
-                _ = py.attributeError("Member {s} has no slot", .{self.base.name.data()});
-                return error.PyError;
+                try py.attributeError("Member {s} has no slot", .{self.base.name.data()});
+                unreachable;
             }
         }
 
@@ -736,8 +721,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
             if (atom.slotPtr(self.base.info.index)) |ptr| {
                 if (atom.info.is_frozen) {
                     // @branchHint(.unlikely);
-                    _ = py.attributeError("Can't set attribute of frozen Atom", .{});
-                    return error.PyError;
+                    return py.attributeError("Can't set attribute of frozen Atom", .{});
                 }
 
                 if (try readSlot(@ptrCast(self), atom, ptr)) |old| {
@@ -761,8 +745,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                 return; // Ok
             } else {
                 // @branchHint(.cold);
-                _ = py.attributeError("Member has no slot", .{});
-                return error.PyError;
+                return py.attributeError("Member has no slot", .{});
             }
         }
 
@@ -770,8 +753,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         pub fn delattr(self: *Self, atom: *AtomBase) !void {
             if (atom.info.is_frozen) {
                 // @branchHint(.unlikely);
-                _ = py.attributeError("Can't delete attribute of frozen Atom", .{});
-                return error.PyError;
+                return py.attributeError("Can't delete attribute of frozen Atom", .{});
             }
             if (atom.slotPtr(self.base.info.index)) |ptr| {
                 if (try self.readSlot(atom, ptr)) |old| {
@@ -782,8 +764,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                 // Else nothing to do
             } else {
                 // @branchHint(.cold);
-                _ = py.attributeError("Member has no slot", .{});
-                return error.PyError;
+                return py.attributeError("Member has no slot", .{});
             }
         }
 
@@ -830,7 +811,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         pub fn __get__(self: *Self, cls: ?*AtomBase, _: ?*Object) ?*Object {
             if (cls) |atom| {
                 if (!atom.typeCheckSelf()) {
-                    return py.typeError("Members can only be used on Atom objects", .{});
+                    return py.typeErrorObject(null, "Members can only be used on Atom objects", .{});
                 }
                 const handler = comptime if (@hasDecl(impl, "getattr")) impl.getattr else Self.getattr;
                 return handler(@ptrCast(self), atom) catch null;
@@ -840,8 +821,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
 
         pub fn __set__(self: *Self, atom: *AtomBase, value: ?*Object) c_int {
             if (!atom.typeCheckSelf()) {
-                _ = py.typeError("Members can only be used on Atom objects", .{});
-                return -1;
+                py.typeError("Members can only be used on Atom objects", .{}) catch return -1;
             }
             if (value) |v| {
                 const handler = comptime if (@hasDecl(impl, "setattr")) impl.setattr else Self.setattr;

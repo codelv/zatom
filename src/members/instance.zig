@@ -1,4 +1,4 @@
-const py = @import("../py.zig");
+const py = @import("../api.zig").py;
 const std = @import("std");
 const Object = py.Object;
 const Tuple = py.Tuple;
@@ -35,8 +35,7 @@ pub const InstanceMember = Member("Instance", struct {
 
         if (factory != null and !factory.?.isNone()) {
             if (!factory.?.isCallable()) {
-                _ = py.typeError("factory must be callable", .{});
-                return error.PyError;
+                return py.typeError("factory must be callable", .{});
             }
             self.info.default_mode = .call;
             self.default_context = factory.?.newref();
@@ -49,8 +48,7 @@ pub const InstanceMember = Member("Instance", struct {
                     if (Dict.check(v)) {
                         break :blk @ptrCast(v);
                     } else if (!v.isNone()) {
-                        _ = py.typeError("Instance kwargs must be a dict or None, got: {s}", .{v.typeName()});
-                        return error.PyError;
+                        return py.typeError("Instance kwargs must be a dict or None, got: {s}", .{v.typeName()});
                     }
                 }
                 break :blk null;
@@ -61,8 +59,7 @@ pub const InstanceMember = Member("Instance", struct {
                     if (Tuple.check(v)) {
                         break :blk try Tuple.prepend(@ptrCast(v), cls);
                     } else if (!v.isNone()) {
-                        _ = py.typeError("Instance args must be a tuple or None, got: {s}", .{v.typeName()});
-                        return error.PyError;
+                        return py.typeError("Instance args must be a tuple or None, got: {s}", .{v.typeName()});
                     }
                 }
                 break :blk try Tuple.packNewrefs(.{cls});

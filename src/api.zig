@@ -1,4 +1,4 @@
-const py = @import("py.zig");
+pub const py = @import("deps/py.zig/py.zig");
 const c = py.c;
 const Object = py.Object;
 const Module = py.Module;
@@ -25,11 +25,6 @@ fn modexec(mod: *py.Module) !c_int {
 pub export fn atom_modexec(mod: *py.Module) c_int {
     return modexec(mod) catch |err| switch (err) {
         error.PyError => -1, // Python error
-        //         else => blk: {
-        //             // Set error if a sign error ocurred
-        //             _ = py.systemError("atom init failed");
-        //             break :blk -1;
-        //         },
     };
 }
 

@@ -1,4 +1,4 @@
-const py = @import("../py.zig");
+const py = @import("../api.zig").py;
 const std = @import("std");
 const Object = py.Object;
 const AtomBase = @import("../atom.zig").AtomBase;

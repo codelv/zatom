@@ -1,4 +1,4 @@
-const py = @import("../py.zig");
+const py = @import("../api.zig").py;
 const std = @import("std");
 const Object = py.Object;
 const Tuple = py.Tuple;
@@ -30,16 +30,14 @@ pub const TypedMember = Member("Typed", struct {
         var optional: ?*Object = null;
         try py.parseTupleAndKeywords(args, kwargs, "O|OOOO", @ptrCast(&kwlist), .{ &kind, &init_args, &init_kwargs, &factory, &optional });
         if (!Type.check(kind)) {
-            _ = py.typeError("kind must be a type", .{});
-            return error.PyError;
+            return py.typeError("kind must be a type", .{});
         }
         self.validate_context = kind.newref();
         errdefer py.clear(&self.validate_context);
 
         if (factory != null and !factory.?.isNone()) {
             if (!factory.?.isCallable()) {
-                _ = py.typeError("factory must be callable", .{});
-                return error.PyError;
+                return py.typeError("factory must be callable", .{});
             }
             self.info.default_mode = .call;
             self.default_context = factory.?.newref();
@@ -51,8 +49,7 @@ pub const TypedMember = Member("Typed", struct {
                     if (Dict.check(v)) {
                         break :blk @ptrCast(v);
                     } else if (!v.isNone()) {
-                        _ = py.typeError("Typed kwargs must be a dict or None, got: {s}", .{v.typeName()});
-                        return error.PyError;
+                        return py.typeError("Typed kwargs must be a dict or None, got: {s}", .{v.typeName()});
                     }
                 }
                 break :blk null;
@@ -63,8 +60,7 @@ pub const TypedMember = Member("Typed", struct {
                     if (Tuple.check(v)) {
                         break :blk try Tuple.prepend(@ptrCast(v), kind);
                     } else if (!v.isNone()) {
-                        _ = py.typeError("Typed args must be a tuple or None, got: {s}", .{v.typeName()});
-                        return error.PyError;
+                        return py.typeError("Typed args must be a tuple or None, got: {s}", .{v.typeName()});
                     }
                 }
                 break :blk try Tuple.packNewrefs(.{kind});

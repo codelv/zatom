@@ -1,4 +1,4 @@
-const py = @import("py.zig");
+const py = @import("api.zig").py;
 const std = @import("std");
 const Str = py.Str;
 const Tuple = py.Tuple;
@@ -282,10 +282,7 @@ pub const ObserverPool = struct {
     guard: ?*PoolGuard = null,
 
     pub fn new(allocator: std.mem.Allocator) py.Error!*ObserverPool {
-        const pool = allocator.create(ObserverPool) catch {
-            _ = py.memoryError();
-            return error.PyError;
-        };
+        const pool = allocator.create(ObserverPool) catch return py.memoryError();
         pool.* = .{};
         return pool;
     }
@@ -303,30 +300,30 @@ pub const ObserverPool = struct {
         return false;
     }
 
-    pub fn addObserver(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, observer: *Object, change_types: u8) !void {
+    pub fn addObserver(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, observer: *Object, change_types: u8) py.Error!void {
         if (self.guard) |guard| {
-            try guard.mods.append(.{ .add_observer = .{ .pool = self, .topic = topic.newref(), .observer = observer.newref(), .change_types = change_types } });
+            guard.mods.append(.{ .add_observer = .{ .pool = self, .topic = topic.newref(), .observer = observer.newref(), .change_types = change_types } }) catch return py.memoryError();
             return;
         }
 
         const topic_hash = try topic.hash();
         if (!self.map.contains(topic_hash)) {
-            try self.map.put(allocator, topic_hash, ObserverMap{});
+            self.map.put(allocator, topic_hash, ObserverMap{}) catch return py.memoryError();
         }
         const observer_map = self.map.getPtr(topic_hash).?;
         const observer_hash = try observer.hash();
         if (observer_map.getPtr(observer_hash)) |item| {
             item.change_types = change_types;
         } else {
-            try observer_map.put(allocator, observer_hash, ObserverInfo{ .observer = observer.newref(), .change_types = change_types });
+            observer_map.put(allocator, observer_hash, ObserverInfo{ .observer = observer.newref(), .change_types = change_types }) catch return py.memoryError();
         }
     }
 
     // Remove an observer from the pool. If the pool is guarded
     // by a modification guard this may require allocation.
-    pub fn removeObserver(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, observer: *Object) !void {
+    pub fn removeObserver(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, observer: *Object) py.Error!void {
         if (self.guard) |guard| {
-            try guard.mods.append(.{ .remove_observer = .{ .pool = self, .topic = topic.newref(), .observer = observer.newref() } });
+            guard.mods.append(.{ .remove_observer = .{ .pool = self, .topic = topic.newref(), .observer = observer.newref() } }) catch return py.memoryError();
             return;
         }
 
@@ -344,9 +341,9 @@ pub const ObserverPool = struct {
 
     // Remove all observers for a given topic observer from the pool.
     // If the pool is guarded by a modification guard this may require allocation.
-    pub fn removeTopic(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str) !void {
+    pub fn removeTopic(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str) py.Error!void {
         if (self.guard) |guard| {
-            try guard.mods.append(.{ .remove_topic = .{ .pool = self, .topic = topic.newref() } });
+            guard.mods.append(.{ .remove_topic = .{ .pool = self, .topic = topic.newref() } }) catch return py.memoryError();
             return;
         }
         const key = try topic.hash();
@@ -364,10 +361,7 @@ pub const ObserverPool = struct {
     // by a modification guard this may require allocation.
     pub fn clear(self: *ObserverPool, allocator: std.mem.Allocator) py.Error!void {
         if (self.guard) |guard| {
-            guard.mods.append(.{ .clear = self }) catch {
-                _ = py.memoryError();
-                return error.PyError;
-            };
+            guard.mods.append(.{ .clear = self }) catch return py.memoryError();
             return;
         }
         var topics = self.map.valueIterator();
@@ -382,7 +376,7 @@ pub const ObserverPool = struct {
         self.map.clearRetainingCapacity();
     }
 
-    pub fn notify(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, args: *Tuple, kwargs: ?*Dict, change_types: u8) !void {
+    pub fn notify(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, args: *Tuple, kwargs: ?*Dict, change_types: u8) py.Error!void {
         var ok: bool = true;
         if (self.map.getPtr(try topic.hash())) |observer_map| {
             var guard = PoolGuard.init(self, allocator);
@@ -400,11 +394,11 @@ pub const ObserverPool = struct {
                         result.decref();
                     }
                 } else {
-                    try guard.mods.append(.{ .remove_observer = .{
+                    guard.mods.append(.{ .remove_observer = .{
                         .pool = self,
                         .topic = topic,
                         .observer = item.observer.newref(),
-                    } });
+                    } }) catch return py.memoryError();
                 }
             }
         }
@@ -458,10 +452,7 @@ pub const PoolManager = struct {
 
     // Create a new pool
     pub fn new(allocator: std.mem.Allocator) py.Error!*PoolManager {
-        const self = allocator.create(PoolManager) catch {
-            _ = py.memoryError();
-            return error.PyError;
-        };
+        const self = allocator.create(PoolManager) catch return py.memoryError();
         self.* = .{};
         return self;
     }
@@ -474,42 +465,28 @@ pub const PoolManager = struct {
 
     // Get the index of the next available a pool.
     pub fn acquire(self: *PoolManager, allocator: std.mem.Allocator) py.Error!u32 {
-        return self.acquireInternal(allocator) catch {
-            _ = py.memoryError();
-            return error.PyError;
-        };
-    }
-
-    // Release a pool back
-    pub fn release(self: *PoolManager, allocator: std.mem.Allocator, index: u32) py.Error!void {
-        return self.releaseInternal(allocator, index) catch {
-            _ = py.memoryError();
-            return error.PyError;
-        };
-    }
-
-    inline fn acquireInternal(self: *PoolManager, allocator: std.mem.Allocator) !u32 {
         if (self.free_slots.items.len == 0) {
             if (self.pools.capacity >= std.math.maxInt(u32)) {
                 return error.PyError; // Limit reached
             }
-            const pool = try ObserverPool.new(allocator);
+            const pool = ObserverPool.new(allocator) catch return py.memoryError();
             errdefer pool.deinit(allocator);
-            try self.pools.append(allocator, pool);
+            self.pools.append(allocator, pool) catch return py.memoryError();
             return @intCast(self.pools.items.len - 1);
         }
         return self.free_slots.pop();
     }
 
-    inline fn releaseInternal(self: *PoolManager, allocator: std.mem.Allocator, index: u32) !void {
+    // Release a pool back
+    pub fn release(self: *PoolManager, allocator: std.mem.Allocator, index: u32) py.Error!void {
         if (self.get(index)) |pool| {
             if (pool.guard) |guard| {
-                try guard.mods.append(.{ .release = .{ .mgr = self, .index = index } });
+                guard.mods.append(.{ .release = .{ .mgr = self, .index = index } }) catch return py.memoryError();
                 return; // Will be release when guard is done
             }
             try pool.clear(allocator);
         }
-        try self.free_slots.append(allocator, index);
+        self.free_slots.append(allocator, index) catch return py.memoryError();
     }
 
     pub fn sizeof(self: *PoolManager) usize {

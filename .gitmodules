@@ -1,0 +1,3 @@
+[submodule "src/deps/py.zig"]
+	path = src/deps/py.zig
+	url = https://github.com/codelv/py.zig.git

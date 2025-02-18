@@ -1,4 +1,4 @@
-const py = @import("../py.zig");
+const py = @import("api.zig").py;
 const std = @import("std");
 const Object = py.Object;
 const Type = py.Type;
@@ -32,7 +32,7 @@ pub fn MethodWrapper(comptime T: type) type {
             if (method.getSelf()) |self| {
                 if (T.check(self)) {}
             } else {
-                return py.typeError("Cannot wrap unbound method", .{});
+                return py.typeErrorObject(null, "Cannot wrap unbound method", .{});
             }
             return self;
         }

@@ -1,4 +1,4 @@
-const py = @import("../py.zig");
+const py = @import("../api.zig").py;
 const std = @import("std");
 const Object = py.Object;
 const Tuple = py.Tuple;
@@ -20,8 +20,7 @@ pub const EnumMember = Member("Enum", struct {
     pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
         const n = try args.size();
         if (n < 1) {
-            _ = py.typeError("at least one enum item is required", .{});
-            return error.PyError;
+            return py.typeError("at least one enum item is required", .{});
         }
         var default_value: *Object = try args.get(0);
         if (kwargs) |kw| {
@@ -29,19 +28,16 @@ pub const EnumMember = Member("Enum", struct {
                 if (try args.contains(v)) {
                     default_value = v;
                 } else if (!v.isNone()) {
-                    _ = py.typeError("the default provided is not in the enum items", .{});
-                    return error.PyError;
+                    return py.typeError("the default provided is not in the enum items", .{});
                 }
             } else {
-                _ = py.typeError("only one keyword 'default' is accepted", .{});
-                return error.PyError;
+                return py.typeError("only one keyword 'default' is accepted", .{});
             }
         }
 
         const bitsize = std.math.log2_int_ceil(usize, n);
         if (bitsize == 0 or bitsize > @bitSizeOf(usize)) {
-            _ = py.typeError("bitsize out of range", .{});
-            return error.PyError;
+            return py.typeError("bitsize out of range", .{});
         }
         self.info.width = @intCast(bitsize - 1);
         self.default_context = default_value.newref();
@@ -63,12 +59,11 @@ pub const EnumMember = Member("Enum", struct {
     pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
         const items: *Tuple = @ptrCast(self.validate_context.?);
         if (!try items.contains(new)) {
-            _ = py.valueError("invalid enum value for '{s}' of '{s}'. Got '{s}'", .{
+            return py.valueError("invalid enum value for '{s}' of '{s}'. Got '{s}'", .{
                 self.name.data(),
                 atom.typeName(),
                 new.typeName(),
             });
-            return error.PyError;
         }
     }
 });
