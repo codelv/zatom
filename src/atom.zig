@@ -313,13 +313,15 @@ pub const AtomBase = extern struct {
         }
 
         // Since some members fill slots with other data, the slot might not be a *Object
-        // so instead of using py.clear we delegate clearing to the members themselves.
+        // so only clear those that are pointers
         const meta: *AtomMeta = @ptrCast(self.typeref());
         std.debug.assert(meta.typeCheckSelf());
-        if (meta.gc_members) |members| {
+        if (meta.atom_members) |members| {
             for (members.items) |member| {
                 @setRuntimeSafety(false);
-                py.clear(&self.slots[member.info.index]);
+                if (member.info.storage_mode == .pointer and member.info.index < self.info.slot_count) {
+                    py.clear(&self.slots[member.info.index]);
+                }
             }
         }
         return 0;
@@ -332,14 +334,19 @@ pub const AtomBase = extern struct {
             if (r != 0)
                 return r;
         }
+
+        // Since some members fill slots with other data, the slot might not be a *Object
+        // so only visit those that are pointers
         const meta: *AtomMeta = @ptrCast(self.typeref());
         std.debug.assert(meta.typeCheckSelf());
-        if (meta.gc_members) |members| {
+        if (meta.atom_members) |members| {
             for (members.items) |member| {
                 @setRuntimeSafety(false);
-                const r = py.visit(self.slots[member.info.index], visit, arg);
-                if (r != 0)
-                    return r;
+                if (member.info.storage_mode == .pointer and member.info.index < self.info.slot_count) {
+                    const r = py.visit(self.slots[member.info.index], visit, arg);
+                    if (r != 0)
+                        return r;
+                }
             }
         }
         return 0;

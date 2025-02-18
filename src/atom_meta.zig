@@ -25,15 +25,13 @@ const package_name = @import("api.zig").package_name;
 pub const AtomMeta = extern struct {
     // Reference to the type. This is set in ready
     pub var TypeObject: ?*Type = null;
-    const ManagedMembers = std.ArrayListUnmanaged(*MemberBase);
+    const AtomMembers = std.ArrayListUnmanaged(*MemberBase);
     const Self = @This();
 
     base: Metaclass,
-    atom_members: ?*Dict = null,
+    atom_members: ?*AtomMembers = null,
     pool_manager: ?*PoolManager = null,
     static_observers: ?*ObserverPool = null,
-    // Members that require GC
-    gc_members: ?*ManagedMembers = null,
     slot_count: u16 = 0,
 
     // Import the object protocol
@@ -204,40 +202,47 @@ pub const AtomMeta = extern struct {
     pub fn get_atom_members(self: *Self) ?*Object {
         if (self.atom_members) |members| {
             // Return a proxy
-            const proxy = Dict.newProxy(@ptrCast(members)) catch return null;
-            return @ptrCast(proxy);
+            // const proxy = Dict.newProxy(@ptrCast(members)) catch return null;
+            var dict = Dict.new() catch return null;
+            var ok: bool = false;
+            defer if (!ok) dict.decref();
+            for (members.items) |member| {
+                dict.set(@ptrCast(member.name), @ptrCast(member)) catch return null;
+            }
+            ok = true;
+            return @ptrCast(dict);
         }
         return py.systemError("AtomMeta members were not initialized", .{});
     }
 
     pub fn set_atom_members(self: *Self, members: *Dict, _: ?*anyopaque) c_int {
         const count = self.validate_atom_members(members) catch return -1;
-        py.setref(@ptrCast(&self.atom_members), @ptrCast(members.newref()));
+        //py.setref(@ptrCast(&self.atom_members), @ptrCast(members.newref()));
         self.slot_count = count;
 
-        if (self.gc_members) |old| {
+        if (self.atom_members) |old| {
+            for (old.items) |member| {
+                member.decref();
+            }
             old.clearRetainingCapacity();
         } else {
-            const ptr = py.allocator.create(ManagedMembers) catch {
+            const ptr = py.allocator.create(AtomMembers) catch {
                 _ = py.memoryError();
                 return -1;
             };
             ptr.* = .{};
-            self.gc_members = ptr;
+            self.atom_members = ptr;
         }
-        const managed_members = self.gc_members.?;
+        const members_array = self.atom_members.?;
         var pos: isize = 0;
-
         while (members.next(&pos)) |entry| {
-            // Assign the owner
+            // Assign the owner and copy into our array
             const member: *MemberBase = @ptrCast(entry.value);
-            member.owner = self.newref();
-            if (member.info.storage_mode == .pointer) {
-                managed_members.append(py.allocator, member) catch {
-                    _ = py.memoryError();
-                    return -1;
-                };
-            }
+            py.xsetref(@ptrCast(&member.owner), @ptrCast(self.newref()));
+            members_array.append(py.allocator, member.newref()) catch {
+                _ = py.memoryError();
+                return -1;
+            };
         }
         return 0;
     }
@@ -246,8 +251,14 @@ pub const AtomMeta = extern struct {
         if (!Str.check(name)) {
             return py.typeError("Invalid arguments: Signature is get_member(name: str)", .{});
         }
+        const member_name: *Str = @ptrCast(name);
         if (self.atom_members) |members| {
-            return members.getItemUnchecked(name);
+            for (members.items) |member| {
+                // Since names are interned they can be compared with pointers
+                if (member.name == member_name) {
+                    return @ptrCast(member.newref());
+                }
+            }
         }
         return py.systemError("Members are not initialized", .{});
     }
@@ -260,14 +271,17 @@ pub const AtomMeta = extern struct {
     // Type definition
     // --------------------------------------------------------------------------
     pub fn clear(self: *Self) c_int {
-        py.clear(&self.atom_members);
         if (self.pool_manager) |mgr| {
             mgr.deinit(py.allocator);
             self.pool_manager = null;
         }
-        if (self.gc_members) |members| {
+        // py.clear(&self.atom_members);
+        if (self.atom_members) |members| {
+            for (members.items) |member| {
+                member.decref();
+            }
             members.deinit(py.allocator);
-            self.gc_members = null;
+            self.atom_members = null;
         }
         return 0;
     }
@@ -276,7 +290,16 @@ pub const AtomMeta = extern struct {
         if (self.pool_manager) |mgr| {
             return mgr.traverse(visit, arg);
         }
-        return py.visit(self.atom_members, visit, arg);
+        //return py.visit(self.atom_members, visit, arg);
+        if (self.atom_members) |members| {
+            for (members.items) |member| {
+                const r = py.visit(member, visit, arg);
+                if (r != 0)
+                    return r;
+            }
+
+        }
+        return 0;
     }
 
     pub fn dealloc(self: *Self) void {
