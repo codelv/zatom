@@ -186,6 +186,10 @@ pub const EventMember = Member("Event", struct {
     }
 });
 
+pub const all_members = .{
+    EventMember,
+};
+
 pub fn initModule(mod: *py.Module) !void {
     // Strings used to create the event dict
     inline for (.{ "type", "event", "object", "name", "value" }) |str| {

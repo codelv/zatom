@@ -1,70 +1,59 @@
 import pytest
 from atom import api as catom
-
 from zatom import api as zatom
 
 pytest.importorskip("pytest_benchmark")
 
+@pytest.mark.parametrize("atom", (catom, zatom, 'slots'))
 @pytest.mark.benchmark(group="init")
-def test_create_small_obj_zatom(benchmark):
-    class Point(zatom.Atom):
-        x = zatom.Int()
-        y = zatom.Int()
-        z = zatom.Int()
+def test_create_small_obj(benchmark, atom):
+    if atom == 'slots':
+        class Point:
+            __slots__ = ("x", "y", "z")
+    else:
+        class Point(atom.Atom):
+            x = atom.Int()
+            y = atom.Int()
+            z = atom.Int()
 
     benchmark.pedantic(Point, rounds=100000, iterations=100)
 
 
-@pytest.mark.benchmark(group="init")
-def test_create_small_obj_atom(benchmark):
-    class Point(catom.Atom):
-        x = catom.Int()
-        y = catom.Int()
-        z = catom.Int()
-
-    benchmark.pedantic(Point, rounds=100000, iterations=100)
-
-
-@pytest.mark.benchmark(group="init")
-def test_create_small_obj_slots(benchmark):
-    class Point:
-        __slots__ = ("x", "y", "z")
-
-    benchmark.pedantic(Point, rounds=100000, iterations=100)
-
-
-@pytest.mark.benchmark(group="getattr")
-def test_getattr_zatom(benchmark):
-    class Point(zatom.Atom):
-        x = zatom.Int()
+@pytest.mark.parametrize("atom", (catom, zatom, 'slots'))
+@pytest.mark.benchmark(group="getattr-int")
+def test_getattr_int(benchmark, atom):
+    if atom == 'slots':
+        class Point:
+            __slots__ = ("x", )
+    else:
+        class Point(atom.Atom):
+            x = atom.Int()
 
     p = Point()
     p.x = 1
 
     benchmark.pedantic(lambda: p.x, rounds=100000, iterations=100)
 
-@pytest.mark.benchmark(group="getattr")
-def test_getattr_atom(benchmark):
-    class Point(catom.Atom):
-        x = catom.Int()
 
-    p = Point()
-    p.x = 1
+@pytest.mark.parametrize("atom", (catom, zatom, 'slots'))
+@pytest.mark.benchmark(group="getattr-bool")
+def test_getattr_bool(benchmark, atom):
+    if atom == 'slots':
+        class Obj:
+            __slots__ = ("count", "ok")
+    else:
+        class Obj(atom.Atom):
+            count = atom.Int()
+            ok = atom.Bool()
 
-    benchmark.pedantic(lambda: p.x, rounds=100000, iterations=100)
+    obj = Obj()
+    obj.ok = True
 
-@pytest.mark.benchmark(group="getattr")
-def test_getattr_slots(benchmark):
-    class Point:
-        __slots__ = ("x", )
+    benchmark.pedantic(lambda: obj.ok, rounds=100000, iterations=100)
 
-    p = Point()
-    p.x = 1
 
-    benchmark.pedantic(lambda: p.x, rounds=100000, iterations=100)
-
-@pytest.mark.benchmark(group="getattr")
-def test_getattr_property(benchmark):
+@pytest.mark.benchmark(group="getattr-int")
+def test_getattr_int_property(benchmark):
     class Point:
         __slots__ = ("_x",)
         def _get_x(self):
@@ -79,10 +68,15 @@ def test_getattr_property(benchmark):
 
     benchmark.pedantic(lambda: p.x, rounds=100000, iterations=100)
 
+@pytest.mark.parametrize("atom", (catom, zatom, 'slots'))
 @pytest.mark.benchmark(group="setattr")
-def test_setattr_zatom(benchmark):
-    class Point(zatom.Atom):
-        x = zatom.Int()
+def test_setattr(benchmark, atom):
+    if atom == 'slots':
+        class Point:
+            __slots__ = ("x", )
+    else:
+        class Point(atom.Atom):
+            x = atom.Int()
 
     p = Point()
 
@@ -91,27 +85,18 @@ def test_setattr_zatom(benchmark):
 
     benchmark.pedantic(add, rounds=100000, iterations=100)
 
-@pytest.mark.benchmark(group="setattr")
-def test_setattr_atom(benchmark):
-    class Point(catom.Atom):
-        x = catom.Int()
 
-    p = Point()
+@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.benchmark(group="validate-set")
+def test_validate_set_int(benchmark, atom):
+    class Obj(atom.Atom):
+        items = atom.Set(atom.Int())
 
-    def add():
-        p.x += 1
+    obj = Obj()
+    value = {i for i in range(1000)}
 
-    benchmark.pedantic(add, rounds=100000, iterations=100)
+    def update():
+        obj.items = value
+        del obj.items
 
-@pytest.mark.benchmark(group="setattr")
-def test_setattr_slots(benchmark):
-    class Point:
-        __slots__ = ("x", )
-
-    p = Point()
-    p.x = 0
-
-    def add():
-        p.x += 1
-
-    benchmark.pedantic(add, rounds=100000, iterations=100)
+    benchmark.pedantic(update, rounds=1000, iterations=10)

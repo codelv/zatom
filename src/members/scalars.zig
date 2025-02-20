@@ -94,7 +94,7 @@ pub const BytesMember = Member("Bytes", struct {
     }
 });
 
-const all_types = .{
+pub const all_members = .{
     ValueMember,
     CallableMember,
     BoolMember,
@@ -107,7 +107,7 @@ const all_types = .{
 pub fn initModule(mod: *py.Module) !void {
     empty_str = try py.Str.internFromString("");
     errdefer py.clear(&empty_str);
-    inline for (all_types) |T| {
+    inline for (all_members) |T| {
         try T.initType();
         errdefer T.deinitType();
         try mod.addObjectRef(T.TypeName, @ptrCast(T.TypeObject.?));
@@ -118,7 +118,7 @@ pub fn deinitModule(mod: *py.Module) void {
     _ = mod;
     errdefer py.clear(&empty_str);
     errdefer py.clear(&empty_bytes);
-    inline for (all_types) |T| {
+    inline for (all_members) |T| {
         T.deinitType();
     }
 }

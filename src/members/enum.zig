@@ -68,14 +68,14 @@ pub const EnumMember = Member("Enum", struct {
     }
 });
 
-const all_types = .{
+pub const all_members = .{
     EnumMember,
 };
 
 pub fn initModule(mod: *py.Module) !void {
     default_str = try Str.internFromString("default");
     errdefer py.clear(&default_str);
-    inline for (all_types) |T| {
+    inline for (all_members) |T| {
         try T.initType();
         errdefer T.deinitType();
         try mod.addObjectRef(T.TypeName, @ptrCast(T.TypeObject.?));
@@ -84,7 +84,7 @@ pub fn initModule(mod: *py.Module) !void {
 
 pub fn deinitModule(mod: *py.Module) void {
     _ = mod;
-    inline for (all_types) |T| {
+    inline for (all_members) |T| {
         T.deinitType();
     }
     py.clear(&default_str);

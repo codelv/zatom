@@ -10,8 +10,6 @@ const atom_meta = @import("atom_meta.zig");
 const atom = @import("atom.zig");
 pub const package_name = "zatom";
 
-/////////////////////////////////////////////////
-
 fn modexec(mod: *py.Module) !c_int {
     try member.initModule(mod);
     errdefer member.deinitModule(mod);

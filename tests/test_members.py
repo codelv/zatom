@@ -5,13 +5,16 @@ from zatom.api import (
     AtomMeta,
     Bool,
     Bytes,
+    Dict,
     Enum,
     Event,
     Float,
+    List,
     Instance,
     Int,
     Member,
     Str,
+    Set,
     Tuple,
     Typed,
     Value,
@@ -106,13 +109,20 @@ def test_int():
 
 
 def test_str():
+    def new_memo():
+        return "foo"
     class A(Atom):
         name = Str()
+        memo = Str(factory=new_memo)
 
     a = A()
     assert a.name == ""
     a.name = "1"
     assert a.name == "1"
+
+    assert a.memo == "foo"
+    assert A.memo.default_value_mode[-1] is new_memo
+
     with pytest.raises(TypeError):
         a.name = 1
 
@@ -143,14 +153,18 @@ def test_bool():
 def test_float():
     class A(Atom):
         x = Float()
-        y = Float()
+        y = Float(factory=lambda: 99.0)
         z = Float(1.0)
 
     a = A()
     assert a.x == 0.0
     a.x = 2.0
     assert a.x == 2.0
-    assert a.y == 0.0
+    assert a.y == 99.0
+    a.y = 12.0
+    assert a.y == 12.0
+    del a.y
+    assert a.y == 99.0
     assert a.z == 1.0
 
     with pytest.raises(TypeError):
@@ -291,3 +305,74 @@ def test_event():
 
     with pytest.raises(TypeError):
         a.clicked(1)
+
+
+def test_set():
+    class A(Atom):
+        a = Set()
+        b = Set(Int())
+        c = Set(str, default={"a", "b", "c"})
+
+    a = A()
+    assert a.a == set()
+    a.a = {'a',1, True}
+    with pytest.raises(TypeError):
+        a.b = {'a'}
+    a.b = {1, 2, 3}
+    assert a.b == {1, 2, 3}
+    assert a.c == {'a', 'b','c'}
+    a.c.add('d')
+    assert a.c == {'a', 'b','c', 'd'}
+    del a.c
+    assert a.c == {'a', 'b','c'}
+
+
+def test_list():
+    class A(Atom):
+        a = List()
+        b = List(Int())
+        c = List(str, default=["a", "b", "c"])
+    a = A()
+    assert a.a == []
+    a.b = [1, 2, 3]
+    with pytest.raises(TypeError):
+        a.b = [1, '2']
+
+    # Make sure default does not get modified
+    assert a.c == ["a", "b", "c"]
+    a.c.append("d")
+    assert a.c == ["a", "b", "c", "d"]
+    del a.c
+    assert a.c == ["a", "b", "c"]
+
+    with pytest.raises(TypeError):
+        a.c = [1]
+
+
+def test_dict():
+    class A(Atom):
+        a = Dict(default={"a": "b"})
+        b = Dict(str, Int())
+        c = Dict(int, List(int), factory=lambda: {1: [2]})
+    a = A()
+    assert a.a == {"a": "b"}
+    a.a["c"] = "d"
+    assert a.a == {"a": "b", "c": "d"}
+    del a.a
+    assert a.a == {"a": "b"}
+
+    with pytest.raises(TypeError):
+        a.a = []
+
+    # Child validators
+    a.b = {"a": 1}
+    with pytest.raises(TypeError):
+        a.b = {"a": "2"}
+    with pytest.raises(TypeError):
+        a.b = {1: "2"}
+
+    assert a.c == {1: [2]}
+    a.c = {1: [1, 2]}
+
+    with pytest.raises(TypeError):
+        a.c = {1: 2}

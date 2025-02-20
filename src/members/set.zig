@@ -1,6 +1,7 @@
 const py = @import("../api.zig").py;
 const std = @import("std");
 const Object = py.Object;
+const Set = py.Set;
 const Tuple = py.Tuple;
 const Dict = py.Dict;
 const AtomBase = @import("../atom.zig").AtomBase;
@@ -9,9 +10,9 @@ const MemberBase = member.MemberBase;
 const Member = member.Member;
 const InstanceMember = @import("instance.zig").InstanceMember;
 
-pub const TupleMember = Member("Tuple", struct {
+pub const SetMember = Member("Set", struct {
 
-    // Tuple takes an optional item, default, and factory
+    // Set takes an optional item, default, and factory
     pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
         const kwlist = [_:null][*c]const u8{
             "item",
@@ -34,12 +35,12 @@ pub const TupleMember = Member("Tuple", struct {
             self.info.default_mode = .call;
             self.default_context = default_factory.?.newref();
         } else if (py.notNone(default_value)) {
-            if (!Tuple.check(default_value.?)) {
-                return py.typeError("Tuple default must be a tuple", .{});
+            if (!Set.check(default_value.?)) {
+                return py.typeError("Set default must be a set", .{});
             }
             self.default_context = default_value.?.newref();
         } else {
-            self.default_context = @ptrCast(try Tuple.new(0));
+            self.default_context = @ptrCast(try Set.new(null));
         }
         errdefer py.clear(&self.default_context);
         errdefer py.clear(&self.validate_context);
@@ -56,28 +57,40 @@ pub const TupleMember = Member("Tuple", struct {
         }
     }
 
+    pub fn defaultStatic(self: *MemberBase, _: *AtomBase) !*Object {
+        if (self.default_context) |value| {
+            const default_value: *Set = @ptrCast(value);
+            return @ptrCast(try default_value.copy());
+        }
+        try py.systemError("default context missing", .{});
+        unreachable;
+    }
+
     pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
-        if (!Tuple.check(new)) {
-            return self.validateFail(atom, new, "tuple");
+        if (!Set.check(new)) {
+            return self.validateFail(atom, new, "set");
         }
         if (self.validate_context) |context| {
-            const tuple: *Tuple = @ptrCast(new);
+            const obj: *Set = @ptrCast(new);
+            // TODO: How expensive is this???
             const instance: *MemberBase = @ptrCast(context);
             const validator = try member.dynamicValidate(instance);
-            const n = try tuple.size();
-            for (0..n) |i| {
-                try validator(instance, atom, py.None(), try tuple.get(i));
+
+            const iter = try obj.iter();
+            while (try iter.next()) |item| {
+                defer item.decref();
+                try validator(instance, atom, py.None(), item);
             }
         }
     }
 });
 
-pub const all_types = .{
-    TupleMember,
+pub const all_members = .{
+    SetMember,
 };
 
 pub fn initModule(mod: *py.Module) !void {
-    inline for (all_types) |T| {
+    inline for (all_members) |T| {
         try T.initType();
         errdefer T.deinitType();
         try mod.addObjectRef(T.TypeName, @ptrCast(T.TypeObject.?));
@@ -86,7 +99,8 @@ pub fn initModule(mod: *py.Module) !void {
 
 pub fn deinitModule(mod: *py.Module) void {
     _ = mod;
-    inline for (all_types) |T| {
+    inline for (all_members) |T| {
         T.deinitType();
     }
 }
+

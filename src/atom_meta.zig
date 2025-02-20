@@ -29,7 +29,6 @@ pub const AtomMeta = extern struct {
     const Self = @This();
 
     base: Metaclass,
-    __slots__: ?*Object = null,
     atom_members: ?*AtomMembers = null,
     pool_manager: ?*PoolManager = null,
     static_observers: ?*ObserverPool = null,
@@ -89,7 +88,7 @@ pub const AtomMeta = extern struct {
             if (MemberBase.check(entry.value) and Str.check(entry.key)) {
                 // TODO: Clone if a this is a base class member
                 const member: *MemberBase = @ptrCast(entry.value);
-                member.name = @ptrCast(entry.key);
+                py.setref(@ptrCast(&member.name), @ptrCast(entry.key.newref()));
                 switch (member.info.storage_mode) {
                     .pointer => {
                         member.info.index = @intCast(slot_count);
@@ -309,7 +308,6 @@ pub const AtomMeta = extern struct {
         .{ .ml_name = "members", .ml_meth = @constCast(@ptrCast(&get_atom_members)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Get atom members" },
         .{}, // sentinel
     };
-
 
     const type_slots = [_]py.TypeSlot{
         .{ .slot = py.c.Py_tp_new, .pfunc = @constCast(@ptrCast(&new)) },

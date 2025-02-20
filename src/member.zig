@@ -16,8 +16,10 @@ var update_str: ?*Str = null;
 var delete_str: ?*Str = null;
 var name_str: ?*Str = null;
 var object_str: ?*Str = null;
-var value_str: ?*Str = null;
+pub var key_str: ?*Str = null;
+pub var value_str: ?*Str = null;
 var oldvalue_str: ?*Str = null;
+pub var item_str: ?*Str = null;
 
 const AtomBase = @import("atom.zig").AtomBase;
 const AtomMeta = @import("atom_meta.zig").AtomMeta;
@@ -52,6 +54,7 @@ pub const MemberBase = extern struct {
     // Reference to the type. This is set in ready
     pub var TypeObject: ?*Type = null;
     const Self = @This();
+    pub const Validator = *const fn (*MemberBase, *AtomBase, *Object, *Object) py.Error!void;
 
     base: Object,
     metadata: ?*Dict = null,
@@ -59,15 +62,15 @@ pub const MemberBase = extern struct {
     validate_context: ?*Object = null,
     coercer_context: ?*Object = null,
     name: *Str = undefined,
-    // The class to which this member is bound
-    owner: ?*AtomMeta = null,
+    // The class or parent member which owns this member
+    owner: ?*Object = null,
     info: MemberInfo,
 
     // Import the object protocol
     pub usingnamespace py.ObjectProtocol(@This());
 
     // Type check the given object. This assumes the module was initialized
-    pub fn check(obj: *Object) bool {
+    pub fn check(obj: *const Object) bool {
         return obj.typeCheck(TypeObject.?);
     }
 
@@ -351,9 +354,24 @@ pub const MemberBase = extern struct {
         return py.typeErrorObject(null, "tag() requires keyword arguments", .{});
     }
 
+
+    pub fn default_value_mode(self: *Self) ?*Object {
+        const ctx = if (self.default_context) |c| c else py.None();
+        return @ptrCast(Tuple.packNewrefs(.{py.None(), ctx}) catch null);
+    }
+
+    pub fn validate_mode(self: *Self) ?*Object {
+        const ctx = if (self.validate_context) |c| c else py.None();
+        return @ptrCast(Tuple.packNewrefs(.{py.None(), ctx}) catch null);
+    }
+
     // --------------------------------------------------------------------------
     // Internal api
     // --------------------------------------------------------------------------
+    pub fn validate(_: *Self, _: *AtomBase, _: *Object, _: *Object) py.Error!void {
+        // do nothing
+    }
+
     // Helper function for validation failures
     pub fn validateFail(self: *Self, atom: *AtomBase, value: *Object, expected: [:0]const u8) py.Error!void {
         return py.typeError("The '{s}' member on the '{s}' object must be of type '{s}'. Got object of type '{s}' instead", .{
@@ -388,9 +406,35 @@ pub const MemberBase = extern struct {
         }
     }
 
+    pub fn bindValidatorMember(self: *Self, item_member: *MemberBase, name: *Str) !void {
+        if (!item_member.typeCheckSelf() or !name.typeCheckSelf()) {
+            return py.systemError("init validator error", .{});
+        }
+        // Set the name and owner
+        if (item_member.owner != null) {
+            return py.typeError("Cannot reuse a member bound to another member", .{});
+        }
+        item_member.owner = @ptrCast(self.newref());
+        py.setref(@ptrCast(&item_member.name), @ptrCast(name.newref()));
+    }
+
+    pub fn unbindValidatorMember(self: *Self, item_member: *MemberBase) !void {
+        if (!item_member.typeCheckSelf()) {
+            return py.systemError("init validator error", .{});
+        }
+        if (item_member.owner != self) {
+            return py.systemError("cannot unbind a member owned someone else", .{});
+        }
+        py.clear(&item_member.owner);
+    }
+
+    // Only members bound to an atom can have observers
     pub fn staticObservers(self: *Self) ?*ObserverPool {
         if (self.owner) |owner| {
-            return owner.static_observers;
+            if (AtomMeta.check(owner)) {
+                const meta: *AtomMeta = @ptrCast(owner);
+                return meta.static_observers;
+            }
         }
         return null;
     }
@@ -526,6 +570,8 @@ pub const MemberBase = extern struct {
         .{ .name = "bitsize", .get = @ptrCast(&get_bitsize), .set = @ptrCast(&set_bitsize), .doc = "Get the bitsize of the member." },
         .{ .name = "offset", .get = @ptrCast(&get_offset), .set = @ptrCast(&set_offset), .doc = "Get the bitsize of the member." },
         .{ .name = "metadata", .get = @ptrCast(&get_metadata), .set = @ptrCast(&set_metadata), .doc = "Get and set the member metadata" },
+        .{ .name = "validate_mode", .get = @ptrCast(&validate_mode), .set = null, .doc = "Get the member's validate mode and context" },
+        .{ .name = "default_value_mode", .get = @ptrCast(&default_value_mode), .set = null, .doc = "Get the member's default value mode and context" },
         .{}, // sentinel
     };
 
@@ -593,23 +639,27 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         // --------------------------------------------------------------------------
         // Custom member api
         // --------------------------------------------------------------------------
-
         // Returns new reference
         pub fn default(self: *Self, atom: *AtomBase) !*Object {
-            _ = atom;
             switch (self.base.info.default_mode) {
                 .static => {
+                    if (comptime @hasDecl(impl, "defaultStatic")) {
+                        return impl.defaultStatic(@ptrCast(self), atom);
+                    }
                     if (self.base.default_context) |value| {
                         return value.newref();
                     }
                     return py.returnNone();
                 },
                 .call => {
+                    if (comptime @hasDecl(impl, "defaultCall")) {
+                        return impl.defaultCall(self, atom);
+                    }
                     if (self.base.default_context) |callable| {
                         return callable.callArgs(.{});
-                    } else {
-                        return py.systemError("default context missing", .{});
                     }
+                    try py.systemError("default context missing", .{});
+                    unreachable;
                 },
             }
         }
@@ -769,6 +819,10 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         }
 
         pub inline fn validate(self: *Self, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) !void {
+            return validateInternal(@ptrCast(self), atom, oldvalue, newvalue);
+        }
+
+        pub fn validateInternal(self: *MemberBase, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) !void {
             if (comptime @hasDecl(impl, "validate")) {
                 return impl.validate(@ptrCast(self), atom, oldvalue, newvalue);
             }
@@ -796,11 +850,22 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                 var default_factory: ?*Object = null;
                 py.parseTupleAndKeywords(args, kwargs, "|OO", @ptrCast(&kwlist), .{ &default_context, &default_factory }) catch return -1;
 
-                if (default_context) |context| {
-                    self.base.default_context = context.newref();
+                if (py.notNone(default_context) and py.notNone(default_factory)) {
+                    return py.typeErrorObject(-1, "Cannot use both a default and a factory function", .{});
+                }
+
+                if (py.notNone(default_factory)) {
+                    if (!default_factory.?.isCallable()) {
+                        return py.typeErrorObject(-1, "factory must be a callable that returns the default value", .{});
+                    }
+                    self.base.info.default_mode = .call;
+                    self.base.default_context = default_factory.?.newref();
+                } else if (py.notNone(default_context))  {
+                    self.base.default_context = default_context.?.newref();
                 } else if (comptime @hasDecl(impl, "initDefault")) {
                     self.base.default_context = impl.initDefault() catch return -1;
                 }
+                errdefer py.clear(&self.base.default_context);
             }
             if (comptime storage_mode != .pointer) {
                 self.base.info.storage_mode = storage_mode;
@@ -861,13 +926,35 @@ const all_modules = .{
     @import("members/scalars.zig"),
     @import("members/enum.zig"),
     @import("members/instance.zig"),
+    @import("members/list.zig"),
+    @import("members/dict.zig"),
     @import("members/typed.zig"),
     @import("members/tuple.zig"),
+    @import("members/set.zig"),
     @import("members/event.zig"),
 };
 
+
+// Lookup the validate function for a member at runtime
+pub fn dynamicValidate(member: *MemberBase) py.Error!MemberBase.Validator {
+    inline for(all_modules) |mod| {
+        if (comptime @hasDecl(mod, "all_members")) {
+            inline for(mod.all_members) |MemberSubclass| {
+                if (MemberSubclass.check(@ptrCast(member))) {
+                    return &MemberSubclass.validateInternal;
+                }
+            }
+        }
+    }
+    if (MemberBase.check(@ptrCast(member))) {
+        return &MemberBase.validate;
+    }
+    try py.typeError("Invalid argument to dynamic validate", .{});
+}
+
+
 const all_strings = .{
-    "undefined", "type", "object", "name", "value", "oldvalue", "create", "update", "delete",
+    "undefined", "type", "object", "name", "value", "oldvalue", "key", "create", "update", "delete", "item"
 };
 
 pub fn initModule(mod: *py.Module) !void {

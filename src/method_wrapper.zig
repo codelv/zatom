@@ -5,6 +5,8 @@ const Type = py.Type;
 const Dict = py.Dict;
 const Tuple = py.Tuple;
 const Int = py.Int;
+const Method = py.Method;
+const Function = py.Function;
 const package_name = @import("api.zig").package_name;
 const AtomBase = @import("atom.zig").AtomBase;
 
@@ -15,32 +17,30 @@ pub fn MethodWrapper(comptime T: type) type {
         pub var TypeObject: ?*Type = null;
         base: Object,
         ref: *T,
-        func: *Object,
+        func: *Function,
         hash: isize,
 
         pub usingnamespace py.ObjectProtocol(Self);
 
         // Type check the given object. This assumes the module was initialized
-        pub fn check(obj: *Object) bool {
+        pub fn check(obj: *const Object) bool {
             return obj.typeCheck(TypeObject.?);
         }
 
         pub fn new(cls: *Type, args: *Tuple, _: ?*Dict) ?*Self {
-            var method: *py.Method = undefined;
+            var method: *Method = undefined;
             args.parseTyped(.{&method}) catch return null;
             const self: *Self = @ptrCast(cls.genericNew(null, null) catch return null);
-            if (method.getSelf()) |self| {
-                if (!T.check(self)) {
-                    return py.typeErrorObject(null, "MethodWrapper owner is not the correct type", .{});
+            const owner = method.getSelf() catch return null;
+            if (!T.check(owner)) {
+                return py.typeErrorObject(null, "MethodWrapper owner is not the correct type", .{});
 
-                }
-            } else {
-                return py.typeErrorObject(null, "Cannot wrap unbound method", .{});
             }
             return self;
         }
 
         // Resolve the reference
+        // should return a borrowed reference
         pub fn resolve(self: *Self) !*Object {
             switch (T) {
                 AtomBase => self.ref.data(),
@@ -53,7 +53,7 @@ pub fn MethodWrapper(comptime T: type) type {
             if (self.resolve()) |owner| {
                 const meth = Method.new(self.func, owner) catch return null;
                 defer meth.decref();
-                return meth.call(args, kwargs);
+                return meth.call(args, kwargs) catch null;
             }
             return py.returnNone();
         }
@@ -66,7 +66,7 @@ pub fn MethodWrapper(comptime T: type) type {
         }
 
         pub fn __hash__(self: *Self) ?*Object {
-            return Int.newUnchecked(self.hash);
+            return @ptrCast(Int.newUnchecked(self.hash));
         }
 
         pub fn richcompare(self: *Self, other: *T, op: c_int) ?*Object {
