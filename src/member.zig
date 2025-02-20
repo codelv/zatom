@@ -9,16 +9,16 @@ const Dict = py.Dict;
 const Tuple = py.Tuple;
 
 // Thes strings are set at startup
-var undefined_str: ?*Str = null;
-var type_str: ?*Str = null;
-var create_str: ?*Str = null;
-var update_str: ?*Str = null;
-var delete_str: ?*Str = null;
-var name_str: ?*Str = null;
-var object_str: ?*Str = null;
+pub var undefined_str: ?*Str = null;
+pub var type_str: ?*Str = null;
+pub var create_str: ?*Str = null;
+pub var update_str: ?*Str = null;
+pub var delete_str: ?*Str = null;
+pub var name_str: ?*Str = null;
+pub var object_str: ?*Str = null;
 pub var key_str: ?*Str = null;
 pub var value_str: ?*Str = null;
-var oldvalue_str: ?*Str = null;
+pub var oldvalue_str: ?*Str = null;
 pub var item_str: ?*Str = null;
 
 const AtomBase = @import("atom.zig").AtomBase;
@@ -40,13 +40,15 @@ pub const Ownership = enum(u1) { stolen = 0, borrowed = 1 };
 pub const DefaultMode = enum(u1) { static = 0, call = 1 };
 
 pub const MemberInfo = packed struct {
-    index: u16,
-    width: u6, // bit size -1. A value of 0 means 1 one bit
-    offset: u6, // starting bit position in slot
-    storage_mode: StorageMode,
-    default_mode: DefaultMode,
+    index: u16 = 0,
+    width: u6 = 0, // bit size -1. A value of 0 means 1 one bit
+    offset: u6 = 0, // starting bit position in slot
+    storage_mode: StorageMode = .pointer,
+    default_mode: DefaultMode = .static,
     // It is up to the member whether these is used or not
-    optional: bool,
+    optional: bool = false,
+    coerce: bool = false,
+    padding: u31 = 0,
 };
 
 // Base Member class
@@ -374,6 +376,7 @@ pub const MemberBase = extern struct {
 
     // Helper function for validation failures
     pub fn validateFail(self: *Self, atom: *AtomBase, value: *Object, expected: [:0]const u8) py.Error!void {
+        // TODO: include name of "owner"
         return py.typeError("The '{s}' member on the '{s}' object must be of type '{s}'. Got object of type '{s}' instead", .{
             self.name.data(),
             atom.typeName(),
@@ -669,17 +672,20 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         pub inline fn writeSlot(self: *Self, atom: *AtomBase, slot: *?*Object, value: *Object) py.Error!Ownership {
             switch (comptime storage_mode) {
                 .pointer => {
+                    if (comptime @hasDecl(impl, "writeSlotPointer")) {
+                        return impl.writeSlotPointer(@ptrCast(self), atom, slot);
+                    }
                     slot.* = value;
                     return .stolen;
                 },
                 .static => {
-                    if (comptime !@hasDecl(impl, "writeSlot")) {
-                        @compileError("member impl must provide a writeSlot function if storage mode is static. Signature is `pub fn writeSlot(self: *MemberBase, atom: *AtomBase, value: *Object) py.Error!usize`");
+                    if (comptime !@hasDecl(impl, "writeSlotStatic")) {
+                        @compileError("member impl must provide a writeSlotStatic function if storage mode is static. Signature is `pub fn writeSlotStatic(self: *MemberBase, atom: *AtomBase, value: *Object) py.Error!usize`");
                     }
                     const ptr: *usize = @ptrCast(slot);
                     const data_mask = self.base.slotDataMask();
                     const set_mask = self.base.slotSetMask();
-                    const data = try impl.writeSlot(@ptrCast(self), atom, value);
+                    const data = try impl.writeSlotStatic(@ptrCast(self), atom, value);
                     const new_value = data_mask & (data << self.base.info.offset);
                     // Mark the slot as set with the new data
                     ptr.* = (ptr.* & ~data_mask) | new_value | set_mask;
@@ -715,20 +721,23 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         pub inline fn readSlot(self: *Self, atom: *AtomBase, slot: *?*Object) py.Error!?*Object {
             switch (comptime storage_mode) {
                 .pointer => {
+                    if (comptime @hasDecl(impl, "readSlotPointer")) {
+                        return impl.readSlotPointer(@ptrCast(self), atom, slot);
+                    }
                     if (slot.*) |value| {
                         return value;
                     }
                 },
                 .static => {
-                    if (comptime !@hasDecl(impl, "readSlot")) {
-                        @compileError("member impl must provide a readSlot if storage mode is static. Signature is `pub fn readSlot(self: *MemberBase, atom: *AtomBase, data: usize) py.Error!?*Object`");
+                    if (comptime !@hasDecl(impl, "readSlotStatic")) {
+                        @compileError("member impl must provide a readSlotStatic if storage mode is static. Signature is `pub fn readSlotStatic(self: *MemberBase, atom: *AtomBase, data: usize) py.Error!?*Object`");
                     }
                     const ptr: *usize = @ptrCast(slot);
                     const value = ptr.*;
                     if (value & self.base.slotSetMask() != 0) {
                         // Extract only the data allocated for this slot
                         const data = (value & self.base.slotDataMask()) >> self.base.info.offset;
-                        return impl.readSlot(@ptrCast(self), atom, data);
+                        return impl.readSlotStatic(@ptrCast(self), atom, data);
                     }
                 },
                 .none => {},
@@ -738,7 +747,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
 
         // Default getattr implementation provides normal slot behavior
         // Returns new reference
-        pub fn getattr(self: *Self, atom: *AtomBase) !*Object {
+        pub fn getattr(self: *Self, atom: *AtomBase) py.Error!*Object {
             if (atom.slotPtr(self.base.info.index)) |ptr| {
                 if (try readSlot(@ptrCast(self), atom, ptr)) |v| {
                     if (comptime storage_mode == .pointer) {
@@ -748,7 +757,10 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                     }
                 }
                 const default_handler = comptime if (@hasDecl(impl, "default")) impl.default else Self.default;
-                const value = try default_handler(@ptrCast(self), atom);
+                var value = try default_handler(@ptrCast(self), atom);
+                if (comptime @hasDecl(impl, "coerce")) {
+                    py.setref(&value, try impl.coerce(@ptrCast(self), atom, value));
+                }
 
                 // We must track whether the write took ownership of the default value
                 // becuse it is needed in notify create. If the writeSlot says it took ownership
@@ -767,12 +779,19 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         }
 
         // Default setattr implementation provides normal slot behavior
-        pub fn setattr(self: *Self, atom: *AtomBase, value: *Object) !void {
+        pub fn setattr(self: *Self, atom: *AtomBase, newvalue: *Object) py.Error!void {
             if (atom.slotPtr(self.base.info.index)) |ptr| {
                 if (atom.info.is_frozen) {
                     // @branchHint(.unlikely);
                     return py.attributeError("Can't set attribute of frozen Atom", .{});
                 }
+                const coerced = comptime @hasDecl(impl, "coerce");
+                const value =
+                    if (coerced)
+                        try impl.coerce(@ptrCast(self), atom, newvalue)
+                    else
+                        newvalue;
+                defer if (coerced) value.decref(); // if coerced, it's always a new ref that must be released
 
                 if (try readSlot(@ptrCast(self), atom, ptr)) |old| {
                     defer if (storage_mode != .pointer) {
@@ -800,7 +819,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         }
 
         // Default delattr implementation
-        pub fn delattr(self: *Self, atom: *AtomBase) !void {
+        pub fn delattr(self: *Self, atom: *AtomBase) py.Error!void {
             if (atom.info.is_frozen) {
                 // @branchHint(.unlikely);
                 return py.attributeError("Can't delete attribute of frozen Atom", .{});
@@ -818,11 +837,11 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
             }
         }
 
-        pub inline fn validate(self: *Self, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) !void {
+        pub inline fn validate(self: *Self, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) py.Error!void {
             return validateInternal(@ptrCast(self), atom, oldvalue, newvalue);
         }
 
-        pub fn validateInternal(self: *MemberBase, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) !void {
+        pub fn validateInternal(self: *MemberBase, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) py.Error!void {
             if (comptime @hasDecl(impl, "validate")) {
                 return impl.validate(@ptrCast(self), atom, oldvalue, newvalue);
             }

@@ -44,13 +44,13 @@ pub const EnumMember = Member("Enum", struct {
         self.validate_context = @ptrCast(args.newref());
     }
 
-    pub inline fn writeSlot(self: *MemberBase, _: *AtomBase, value: *Object) py.Error!usize {
+    pub inline fn writeSlotStatic(self: *MemberBase, _: *AtomBase, value: *Object) py.Error!usize {
         const items: *Tuple = @ptrCast(self.validate_context.?);
         const data = try items.index(value);
         return data;
     }
 
-    pub inline fn readSlot(self: *MemberBase, _: *AtomBase, data: usize) py.Error!?*Object {
+    pub inline fn readSlotStatic(self: *MemberBase, _: *AtomBase, data: usize) py.Error!?*Object {
         const items: *Tuple = @ptrCast(self.validate_context.?);
         const value = try items.get(data);
         return value.newref();

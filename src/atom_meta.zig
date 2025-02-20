@@ -250,7 +250,7 @@ pub const AtomMeta = extern struct {
             if (!MemberBase.check(item.value))
                 try py.typeError("atom members values must Member", .{});
         }
-        if (pos < 0 or pos > 0xffff)
+        if (pos < 0 or pos > std.math.maxInt(u16))
             try py.typeError("atom member limit reached", .{});
         return @intCast(pos);
     }

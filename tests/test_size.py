@@ -11,6 +11,7 @@ def test_sizeof():
         b = Bool()
         c = Bool()
         d = Bool()
+
     assert A.__slot_count__ == 1
     assert A.a.index == 0
     assert A.b.index == 0

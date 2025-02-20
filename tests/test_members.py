@@ -10,6 +10,8 @@ from zatom.api import (
     Event,
     Float,
     List,
+    TypedList,
+    TypedSet,
     Instance,
     Int,
     Member,
@@ -111,6 +113,7 @@ def test_int():
 def test_str():
     def new_memo():
         return "foo"
+
     class A(Atom):
         name = Str()
         memo = Str(factory=new_memo)
@@ -315,16 +318,24 @@ def test_set():
 
     a = A()
     assert a.a == set()
-    a.a = {'a',1, True}
+    assert type(a.a) is set
+    a.a = {"a", 1, True}
     with pytest.raises(TypeError):
-        a.b = {'a'}
+        a.b = {"a"}
     a.b = {1, 2, 3}
+    assert type(a.b) is TypedSet
     assert a.b == {1, 2, 3}
-    assert a.c == {'a', 'b','c'}
-    a.c.add('d')
-    assert a.c == {'a', 'b','c', 'd'}
+    a.b.update({4})
+    assert a.b == {1, 2, 3, 4}
+    with pytest.raises(TypeError):
+        a.b.add("2")  # not an int
+    assert a.c == {"a", "b", "c"}
+    a.c.add("d")
+    with pytest.raises(TypeError):
+        a.c.update({1, 2, 3})  # not a str
+    assert a.c == {"a", "b", "c", "d"}
     del a.c
-    assert a.c == {'a', 'b','c'}
+    assert a.c == {"a", "b", "c"}
 
 
 def test_list():
@@ -332,11 +343,17 @@ def test_list():
         a = List()
         b = List(Int())
         c = List(str, default=["a", "b", "c"])
+
     a = A()
     assert a.a == []
+    assert type(a.a) is list
     a.b = [1, 2, 3]
+    assert type(a.b) is TypedList
+    a.b.append(4)
     with pytest.raises(TypeError):
-        a.b = [1, '2']
+        a.b.append("5")
+    with pytest.raises(TypeError):
+        a.b = [1, "2"]
 
     # Make sure default does not get modified
     assert a.c == ["a", "b", "c"]
@@ -354,6 +371,7 @@ def test_dict():
         a = Dict(default={"a": "b"})
         b = Dict(str, Int())
         c = Dict(int, List(int), factory=lambda: {1: [2]})
+
     a = A()
     assert a.a == {"a": "b"}
     a.a["c"] = "d"
@@ -373,6 +391,10 @@ def test_dict():
 
     assert a.c == {1: [2]}
     a.c = {1: [1, 2]}
+
+    # TODO: Validateors might need to coerce...
+    # with pytest.raises(TypeError):
+    #    a.c[1].append('4')
 
     with pytest.raises(TypeError):
         a.c = {1: 2}

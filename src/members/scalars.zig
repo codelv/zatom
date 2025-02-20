@@ -33,11 +33,11 @@ pub const BoolMember = Member("Bool", struct {
         return py.returnFalse();
     }
 
-    pub inline fn writeSlot(_: *MemberBase, _: *AtomBase, value: *Object) py.Error!usize {
+    pub inline fn writeSlotStatic(_: *MemberBase, _: *AtomBase, value: *Object) py.Error!usize {
         return @intFromBool(value == py.True());
     }
 
-    pub inline fn readSlot(_: *MemberBase, _: *AtomBase, data: usize) py.Error!?*Object {
+    pub inline fn readSlotStatic(_: *MemberBase, _: *AtomBase, data: usize) py.Error!?*Object {
         return py.returnBool(data != 0);
     }
 
