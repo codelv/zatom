@@ -105,7 +105,7 @@ pub const TypedSet = extern struct {
             try validator(validate_member, atom, py.None(), item);
         }
 
-        const context = try Tuple.packNewrefs(.{validate_member, atom});
+        const context = try Tuple.packNewrefs(.{ validate_member, atom });
         errdefer context.decref();
         const self = try newNoContext(items);
         self.validator = validator;
@@ -115,10 +115,7 @@ pub const TypedSet = extern struct {
 
     pub fn hasSameContext(self: *Self, validate_member: ?*Object, atom: *AtomBase) bool {
         if (self.validate_context) |tuple| {
-            return (
-                tuple.getUnsafe(0) == validate_member
-                and @as(*AtomBase, @ptrCast(tuple.getUnsafe(1).?)) == atom
-            );
+            return (tuple.getUnsafe(0) == validate_member and @as(*AtomBase, @ptrCast(tuple.getUnsafe(1).?)) == atom);
         }
         return validate_member == null;
     }
@@ -167,7 +164,6 @@ pub const TypedSet = extern struct {
         .{ .ml_name = "symmetric_difference_update", .ml_meth = @constCast(@ptrCast(&symmetric_difference_update)), .ml_flags = py.c.METH_O, .ml_doc = "Update the set, keeping only elements found in either set, but not in both." },
         .{ .ml_name = "update", .ml_meth = @constCast(@ptrCast(&update)), .ml_flags = py.c.METH_VARARGS, .ml_doc = "Update the set, adding elements from all others." },
         .{}, // sentinel
-
     };
 
     const type_slots = [_]py.TypeSlot{
@@ -324,4 +320,3 @@ pub fn deinitModule(mod: *py.Module) void {
     TypedSet.deinitType();
     py.clear(&set_update_method);
 }
-

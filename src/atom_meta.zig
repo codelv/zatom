@@ -167,6 +167,7 @@ pub const AtomMeta = extern struct {
             return null;
         }
         cls.slot_count = @intCast(slot_count);
+        // TODO: Lazy init this???
         cls.pool_manager = PoolManager.new(py.allocator) catch return null;
         defer if (!ok) cls.pool_manager.?.deinit(py.allocator);
         ok = true;
@@ -255,10 +256,25 @@ pub const AtomMeta = extern struct {
         return @intCast(pos);
     }
 
+    // Create a pool if one does not exist
+    pub fn staticObserverPool(self: *Self) !?*ObserverPool {
+        if (self.static_observers) |pool| {
+            return pool;
+        }
+        if (self.pool_manager) |mgr| {
+            const pool_index = try mgr.acquire(py.allocator);
+            self.static_observers = mgr.get(pool_index);
+            return self.static_observers.?;
+        }
+        try py.systemError("No pool manager", .{});
+        unreachable;
+    }
+
     // --------------------------------------------------------------------------
     // Type definition
     // --------------------------------------------------------------------------
     pub fn clear(self: *Self) c_int {
+        // The pool owns the static_observers so we don't need to release it
         if (self.pool_manager) |mgr| {
             mgr.deinit(py.allocator);
             self.pool_manager = null;
@@ -281,7 +297,6 @@ pub const AtomMeta = extern struct {
                 if (r != 0)
                     return r;
             }
-
         }
         if (self.pool_manager) |mgr| {
             const r = mgr.traverse(visit, arg);

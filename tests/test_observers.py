@@ -47,3 +47,28 @@ def test_dynamic_observe():
 
     a.x = 3
     assert len(changes) == 3
+
+
+def test_static_observe():
+    class A(Atom):
+        x = Int()
+
+    changes = []
+
+    def observer(change):
+        print(change)
+        changes.append(change)
+
+    assert not A.x.has_observers()
+    assert not A.x.has_observer(observer)
+
+    A.x.add_static_observer(observer)
+
+    assert A.x.has_observers()
+    assert A.x.has_observer(observer)
+
+    a = A()
+    a.x
+    assert len(changes) == 1
+    assert changes[-1] == {"type": "create", "name": "x", "object": a, "value": 0}
+

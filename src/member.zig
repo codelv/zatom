@@ -292,7 +292,7 @@ pub const MemberBase = extern struct {
 
     pub fn add_static_observer(self: *Self, args: [*]*Object, n: isize) ?*Object {
         const msg = "Invalid arguments. Signature is add_static_observer(observer: str | Callable, change_types: int = 0xff)";
-        if (n < 1 or n < 2) {
+        if (n < 1 or n > 2) {
             return py.typeErrorObject(null, msg, .{});
         }
         const observer = args[0];
@@ -310,8 +310,12 @@ pub const MemberBase = extern struct {
             break :blk @intFromEnum(ChangeType.any);
         };
 
-        if (self.staticObservers()) |pool| {
-            pool.addObserver(py.allocator, self.name, observer, change_types) catch return null;
+        if (self.staticAtomMeta()) |meta| {
+            if (meta.staticObserverPool() catch return null) |pool| {
+                pool.addObserver(py.allocator, self.name, observer, change_types) catch return null;
+            }
+        } else {
+            return py.typeErrorObject(null, "Cannot add a static observer on a nested member", .{});
         }
         return py.returnNone();
     }
@@ -356,15 +360,14 @@ pub const MemberBase = extern struct {
         return py.typeErrorObject(null, "tag() requires keyword arguments", .{});
     }
 
-
     pub fn default_value_mode(self: *Self) ?*Object {
         const ctx = if (self.default_context) |c| c else py.None();
-        return @ptrCast(Tuple.packNewrefs(.{py.None(), ctx}) catch null);
+        return @ptrCast(Tuple.packNewrefs(.{ py.None(), ctx }) catch null);
     }
 
     pub fn validate_mode(self: *Self) ?*Object {
         const ctx = if (self.validate_context) |c| c else py.None();
-        return @ptrCast(Tuple.packNewrefs(.{py.None(), ctx}) catch null);
+        return @ptrCast(Tuple.packNewrefs(.{ py.None(), ctx }) catch null);
     }
 
     // --------------------------------------------------------------------------
@@ -431,13 +434,21 @@ pub const MemberBase = extern struct {
         py.clear(&item_member.owner);
     }
 
-    // Only members bound to an atom can have observers
-    pub fn staticObservers(self: *Self) ?*ObserverPool {
+    // Get the pointer to the class on which this was defined
+    // if this is an unowned member, or nested validator, return null
+    pub fn staticAtomMeta(self: *Self) ?*AtomMeta {
         if (self.owner) |owner| {
             if (AtomMeta.check(owner)) {
-                const meta: *AtomMeta = @ptrCast(owner);
-                return meta.static_observers;
+                return @ptrCast(owner);
             }
+        }
+        return null;
+    }
+
+    // Only members bound to an atom can have observers
+    pub fn staticObservers(self: *Self) ?*ObserverPool {
+        if (self.staticAtomMeta()) |meta| {
+            return meta.static_observers;
         }
         return null;
     }
@@ -788,9 +799,9 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                 const coerced = comptime @hasDecl(impl, "coerce");
                 const value =
                     if (coerced)
-                        try impl.coerce(@ptrCast(self), atom, newvalue)
-                    else
-                        newvalue;
+                    try impl.coerce(@ptrCast(self), atom, newvalue)
+                else
+                    newvalue;
                 defer if (coerced) value.decref(); // if coerced, it's always a new ref that must be released
 
                 if (try readSlot(@ptrCast(self), atom, ptr)) |old| {
@@ -879,7 +890,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                     }
                     self.base.info.default_mode = .call;
                     self.base.default_context = default_factory.?.newref();
-                } else if (py.notNone(default_context))  {
+                } else if (py.notNone(default_context)) {
                     self.base.default_context = default_context.?.newref();
                 } else if (comptime @hasDecl(impl, "initDefault")) {
                     self.base.default_context = impl.initDefault() catch return -1;
@@ -953,12 +964,11 @@ const all_modules = .{
     @import("members/event.zig"),
 };
 
-
 // Lookup the validate function for a member at runtime
 pub fn dynamicValidate(member: *MemberBase) py.Error!MemberBase.Validator {
-    inline for(all_modules) |mod| {
+    inline for (all_modules) |mod| {
         if (comptime @hasDecl(mod, "all_members")) {
-            inline for(mod.all_members) |MemberSubclass| {
+            inline for (mod.all_members) |MemberSubclass| {
                 if (MemberSubclass.check(@ptrCast(member))) {
                     return &MemberSubclass.validateInternal;
                 }
@@ -971,10 +981,7 @@ pub fn dynamicValidate(member: *MemberBase) py.Error!MemberBase.Validator {
     try py.typeError("Invalid argument to dynamic validate", .{});
 }
 
-
-const all_strings = .{
-    "undefined", "type", "object", "name", "value", "oldvalue", "key", "create", "update", "delete", "item"
-};
+const all_strings = .{ "undefined", "type", "object", "name", "value", "oldvalue", "key", "create", "update", "delete", "item" };
 
 pub fn initModule(mod: *py.Module) !void {
     // Strings used to create the change dicts

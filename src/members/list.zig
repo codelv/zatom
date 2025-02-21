@@ -15,7 +15,6 @@ const Member = member.Member;
 const InstanceMember = @import("instance.zig").InstanceMember;
 const package_name = @import("../api.zig").package_name;
 
-
 var context_str: ?*Str = null;
 
 pub const TypedList = extern struct {
@@ -103,7 +102,7 @@ pub const TypedList = extern struct {
             try validator(validate_member, atom, py.None(), list.getUnsafe(i).?);
         }
 
-        const context = try Tuple.packNewrefs(.{validate_member, atom});
+        const context = try Tuple.packNewrefs(.{ validate_member, atom });
         errdefer context.decref();
         const self = try newNoContext(items);
         self.validator = validator;
@@ -113,10 +112,7 @@ pub const TypedList = extern struct {
 
     pub fn hasSameContext(self: *Self, validate_member: ?*Object, atom: *AtomBase) bool {
         if (self.validate_context) |tuple| {
-            return (
-                tuple.getUnsafe(0) == validate_member
-                and @as(*AtomBase, @ptrCast(tuple.getUnsafe(1).?)) == atom
-            );
+            return (tuple.getUnsafe(0) == validate_member and @as(*AtomBase, @ptrCast(tuple.getUnsafe(1).?)) == atom);
         }
         return validate_member == null;
     }
@@ -165,7 +161,6 @@ pub const TypedList = extern struct {
         .{ .ml_name = "insert", .ml_meth = @constCast(@ptrCast(&insert)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Insert an item into the list." },
         .{ .ml_name = "extend", .ml_meth = @constCast(@ptrCast(&extend)), .ml_flags = py.c.METH_O, .ml_doc = "Extend the list with items from an iterable." },
         .{}, // sentinel
-
     };
 
     const type_slots = [_]py.TypeSlot{
@@ -196,7 +191,6 @@ pub const TypedList = extern struct {
         py.clear(&TypeObject);
     }
 };
-
 
 pub const ListMember = Member("List", struct {
 
@@ -297,7 +291,6 @@ pub const ListMember = Member("List", struct {
 pub const all_members = .{
     ListMember,
 };
-
 
 pub fn initModule(mod: *py.Module) !void {
     context_str = try Str.internFromString("context");

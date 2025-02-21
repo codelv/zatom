@@ -349,7 +349,7 @@ pub const AtomBase = extern struct {
 
     const getset = [_]py.GetSetDef{
         //.{ .name = "__slots__", .get = @ptrCast(&get_type_slots), .set = null, .doc = "Type slots" },
-        .{} // sentinel
+        .{}, // sentinel
     };
 
     const methods = [_]py.MethodDef{
@@ -408,7 +408,6 @@ comptime {
 pub fn Atom(comptime slot_count: u16) type {
     if (slot_count < 1) {
         @compileError("Cannot create an AtomBase subclass with < 1 slot. Use the AtomBase instead");
-
     }
     const extra_slots = slot_count - 1;
     const AtomSubclass = extern struct {
@@ -467,7 +466,7 @@ pub fn Atom(comptime slot_count: u16) type {
         const size = @sizeOf(AtomSubclass);
         const expected = @sizeOf(AtomBase) + extra_slots * @sizeOf(?*Object);
         if (size != expected) {
-            @compileError(std.fmt.comptimePrint("AtomSubclass size expected {} bytes got {}", .{expected, size}));
+            @compileError(std.fmt.comptimePrint("AtomSubclass size expected {} bytes got {}", .{ expected, size }));
         }
     }
     return AtomSubclass;

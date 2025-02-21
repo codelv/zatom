@@ -34,7 +34,6 @@ pub fn MethodWrapper(comptime T: type) type {
             const owner = method.getSelf() catch return null;
             if (!T.check(owner)) {
                 return py.typeErrorObject(null, "MethodWrapper owner is not the correct type", .{});
-
             }
             return self;
         }
