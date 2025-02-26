@@ -218,6 +218,7 @@ pub const AtomBase = extern struct {
             self.addDynamicObserver(@ptrCast(topic), callback, change_types) catch return null;
         } else {
             const iter = topic.iter() catch return null;
+            defer iter.decref();
             while (iter.next() catch return null) |item| {
                 defer item.decref();
                 if (!Str.check(item)) {

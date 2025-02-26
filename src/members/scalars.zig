@@ -11,21 +11,23 @@ var empty_str: ?*py.Str = null;
 var empty_bytes: ?*py.Bytes = null;
 
 // Does no validation at all
-pub const ValueMember = Member("Value", struct {
+pub const ValueMember = Member("Value", 7, struct {
     pub inline fn initDefault() !?*Object {
         return py.returnNone();
     }
 });
 
-pub const CallableMember = Member("Callable", struct {
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
+pub const CallableMember = Member("Callable", 8, struct {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
         if (!new.isCallable()) {
-            return self.validateFail(atom, new, "callable");
+            try self.validateFail(atom, new, "callable");
+            unreachable;
         }
+        return new.newref();
     }
 });
 
-pub const BoolMember = Member("Bool", struct {
+pub const BoolMember = Member("Bool", 9, struct {
     pub const storage_mode: StorageMode = .static;
     pub const default_bitsize = 1;
 
@@ -41,56 +43,70 @@ pub const BoolMember = Member("Bool", struct {
         return py.returnBool(data != 0);
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
         if (!py.Bool.check(new)) {
-            return self.validateFail(atom, new, "bool");
+            try self.validateFail(atom, new, "bool");
+            unreachable;
         }
+        return new.newref();
     }
 });
 
-pub const IntMember = Member("Int", struct {
+pub const IntMember = Member("Int", 10, struct {
     pub inline fn initDefault() !?*Object {
         return @ptrCast(try py.Int.new(0));
     }
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
         if (!py.Int.check(new)) {
-            return self.validateFail(atom, new, "int");
+            try self.validateFail(atom, new, "int");
+            unreachable;
         }
+        return new.newref();
     }
 });
 
-pub const FloatMember = Member("Float", struct {
+pub const FloatMember = Member("Float", 11, struct {
     pub inline fn initDefault() !?*Object {
         return @ptrCast(try py.Float.new(0.0));
     }
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
+    pub inline fn coerce(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
         if (!py.Float.check(new)) {
-            return self.validateFail(atom, new, "float");
+            if (self.info.coerce and py.Int.check(new)) {
+                const value = try py.Int.as(@ptrCast(new), f64);
+                return @ptrCast(try py.Float.new(value));
+            }
+            try self.validateFail(atom, new, "float");
+            unreachable;
         }
+        return new.newref();
     }
 });
 
-pub const StrMember = Member("Str", struct {
+pub const StrMember = Member("Str", 12, struct {
     pub inline fn initDefault() !?*Object {
         return @ptrCast(empty_str.?.newref());
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) !void {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
         if (!py.Str.check(new)) {
-            return self.validateFail(atom, new, "str");
+            try self.validateFail(atom, new, "str");
+            unreachable;
         }
+        return new.newref();
     }
 });
 
-pub const BytesMember = Member("Bytes", struct {
+pub const BytesMember = Member("Bytes", 13, struct {
     pub inline fn initDefault() !?*Object {
         return @ptrCast(empty_bytes.?.newref());
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
         if (!py.Bytes.check(new)) {
-            return self.validateFail(atom, new, "bytes");
+            try self.validateFail(atom, new, "bytes");
+            unreachable;
         }
+        return new.newref();
     }
 });
 

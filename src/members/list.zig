@@ -13,6 +13,7 @@ const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
 const Member = member.Member;
 const InstanceMember = @import("instance.zig").InstanceMember;
+const IntMember = @import("scalars.zig").IntMember;
 const package_name = @import("../api.zig").package_name;
 
 var context_str: ?*Str = null;
@@ -24,7 +25,6 @@ pub const TypedList = extern struct {
 
     base: List,
     validate_context: ?*Tuple = null, // tuple[MemberBase, AtomBase]
-    validator: ?MemberBase.Validator = null, // TODO: Consider eliminating this
 
     pub usingnamespace py.ObjectProtocol(Self);
 
@@ -37,8 +37,9 @@ pub const TypedList = extern struct {
     // Methods
     // --------------------------------------------------------------------------
     pub fn append(self: *Self, item: *Object) ?*Object {
-        self.validateOne(item) catch return null;
-        List.append(@ptrCast(self), @ptrCast(item)) catch return null;
+        const new = self.validateOne(item) catch return null;
+        defer new.decref();
+        self.base.append(new) catch return null;
         return py.returnNone();
     }
 
@@ -47,21 +48,24 @@ pub const TypedList = extern struct {
             return py.typeErrorObject(null, "invalid insert arguments", .{});
         }
         const pos = Int.as(@ptrCast(args[0]), isize) catch return null;
-        const item = args[1];
-        self.validateOne(item) catch return null;
-        List.insert(@ptrCast(self), pos, @ptrCast(item)) catch return null;
+        const new = self.validateOne(args[1]) catch return null;
+        defer new.decref();
+        self.base.insert(pos, new) catch return null;
         return py.returnNone();
     }
 
     pub fn extend(self: *Self, items: *Object) ?*Object {
-        self.validateMany(items) catch return null;
-        List.extend(@ptrCast(self), @ptrCast(items)) catch return null;
+        const copy = self.validateMany(items) catch return null;
+        defer copy.decref();
+        self.base.extend(copy) catch return null;
         return py.returnNone();
     }
 
     pub fn assign_item(self: *Self, index: isize, value: ?*Object) c_int {
         if (value) |item| {
-            self.validateOne(item) catch return -1;
+            const new = self.validateOne(item) catch return -1;
+            defer new.decref();
+            return py.c.PyList_Type.tp_as_sequence.*.sq_ass_item.?(@ptrCast(self), index, @ptrCast(new));
         }
         return py.c.PyList_Type.tp_as_sequence.*.sq_ass_item.?(@ptrCast(self), index, @ptrCast(value));
     }
@@ -69,17 +73,22 @@ pub const TypedList = extern struct {
     pub fn assign_subscript(self: *Self, key: *Object, value: ?*Object) c_int {
         if (value) |item| {
             if (Int.checkIndex(key)) {
-                self.validateOne(item) catch return -1;
+                const new = self.validateOne(item) catch return -1;
+                defer new.decref();
+                return py.c.PyList_Type.tp_as_mapping.*.mp_ass_subscript.?(@ptrCast(self), @ptrCast(key), @ptrCast(new));
             } else if (Slice.check(key)) {
-                self.validateMany(item) catch return -1;
+                const copy = self.validateMany(item) catch return -1;
+                defer copy.decref();
+                return py.c.PyList_Type.tp_as_mapping.*.mp_ass_subscript.?(@ptrCast(self), @ptrCast(key), @ptrCast(copy));
             }
         }
         return py.c.PyList_Type.tp_as_mapping.*.mp_ass_subscript.?(@ptrCast(self), @ptrCast(key), @ptrCast(value));
     }
 
     pub fn inplace_concat(self: *Self, item: *Object) ?*Object {
-        self.validateOne(item) catch return null;
-        return @ptrCast(py.c.PyList_Type.tp_as_sequence.*.sq_inplace_concat.?(@ptrCast(self), @ptrCast(item)));
+        const new = self.validateOne(item) catch return null;
+        defer new.decref();
+        return @ptrCast(py.c.PyList_Type.tp_as_sequence.*.sq_inplace_concat.?(@ptrCast(self), @ptrCast(new)));
     }
 
     // --------------------------------------------------------------------------
@@ -90,23 +99,34 @@ pub const TypedList = extern struct {
     }
 
     pub fn newWithContext(items: *Object, validate_member: *MemberBase, atom: *AtomBase) !*TypedList {
-        const validator = try member.dynamicValidate(validate_member);
         if (!List.check(items)) {
             try validate_member.validateFail(atom, items, "list");
             unreachable;
+
         }
-        // Validate the items
         const list: *List = @ptrCast(items);
         const n = try list.size();
-        for (0..n) |i| {
-            try validator(validate_member, atom, py.None(), list.getUnsafe(i).?);
+        const self: *TypedList = @ptrCast(try TypeObject.?.genericNew(null, null));
+        errdefer self.decref();
+
+        // See PyList_New...
+        const byte_count = n * @sizeOf(*Object);
+        if (py.allocator.rawAlloc(byte_count, @alignOf(*Object), 0)) |ptr| {
+            @memset(ptr[0..byte_count], 0);
+            self.base.impl.ob_item = @alignCast(@ptrCast(ptr));
+            self.base.setObjectSize(@intCast(n));
+            self.base.impl.allocated = @intCast(n);
+        } else {
+            try py.memoryError();
         }
 
-        const context = try Tuple.packNewrefs(.{ validate_member, atom });
-        errdefer context.decref();
-        const self = try newNoContext(items);
-        self.validator = validator;
-        self.validate_context = context;
+        for(0..n) |i| {
+            const item = list.getUnsafe(i).?;
+            const value = try validate_member.validate(atom, py.None(), item);
+            self.base.setUnsafe(i, value);
+        }
+        self.validate_context = try Tuple.packNewrefs(.{ validate_member, atom });
+
         return @ptrCast(self);
     }
 
@@ -117,22 +137,30 @@ pub const TypedList = extern struct {
         return validate_member == null;
     }
 
-    pub inline fn validateOne(self: *Self, item: *Object) !void {
-        const tuple = self.validate_context orelse return;
+    pub inline fn validateOne(self: *Self, item: *Object) py.Error!*Object {
+        const tuple = self.validate_context orelse return item.newref();
         const mem: *MemberBase = @ptrCast(tuple.getUnsafe(0).?);
         const atom: *AtomBase = @ptrCast(tuple.getUnsafe(1).?);
-        try self.validator.?(mem, atom, py.None(), item);
+        return try mem.validate(atom, py.None(), item);
     }
 
-    pub inline fn validateMany(self: *Self, items: *Object) !void {
-        const tuple = self.validate_context orelse return;
+    pub inline fn validateMany(self: *Self, items: *Object) py.Error!*Object {
+        const tuple = self.validate_context orelse return items.newref();
         const mem: *MemberBase = @ptrCast(tuple.getUnsafe(0).?);
         const atom: *AtomBase = @ptrCast(tuple.getUnsafe(1).?);
-        const iter = try items.iter();
-        while (try iter.next()) |item| {
-            defer item.decref();
-            try self.validator.?(mem, atom, py.None(), item);
+        if (!List.check(items)) {
+            try mem.validateFail(atom, items, "list");
+            unreachable;
         }
+        const list: *List = @ptrCast(items);
+        const n = try list.size();
+        const copy = try List.new(n);
+        errdefer copy.decref();
+        for(0..n) |i| {
+            const value = try mem.validate(atom, py.None(), list.getUnsafe(i).?);
+            copy.setUnsafe(i, value);
+        }
+        return @ptrCast(copy);
     }
 
     // --------------------------------------------------------------------------
@@ -192,7 +220,7 @@ pub const TypedList = extern struct {
     }
 };
 
-pub const ListMember = Member("List", struct {
+pub const ListMember = Member("List", 6, struct {
 
     // List takes an optional item, default, and factory
     pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
@@ -250,7 +278,7 @@ pub const ListMember = Member("List", struct {
         unreachable;
     }
 
-    pub fn coerce(self: *MemberBase, atom: *AtomBase, value: *Object) !*Object {
+    pub fn coerce(self: *MemberBase, atom: *AtomBase, _: *Object, value: *Object) py.Error!*Object {
         if (self.validate_context) |validate_member| {
             if (TypedList.check(value)) {
                 const typed_list: *TypedList = @ptrCast(value);
@@ -266,26 +294,6 @@ pub const ListMember = Member("List", struct {
         unreachable;
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
-        if (TypedList.check(new)) {
-            return; // Already validated;
-        }
-        // This branch can occur when this member is used as a validator for another member
-        // In this case it does not coerce
-        if (!List.check(new)) {
-            return self.validateFail(atom, new, "list");
-        }
-        if (self.validate_context) |context| {
-            const list: *List = @ptrCast(new);
-            const instance: *MemberBase = @ptrCast(context);
-            const validator = try member.dynamicValidate(instance);
-
-            const n = try list.size();
-            for (0..n) |i| {
-                try validator(instance, atom, py.None(), list.getUnsafe(i).?);
-            }
-        }
-    }
 });
 
 pub const all_members = .{

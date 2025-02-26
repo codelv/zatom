@@ -30,6 +30,7 @@ const package_name = @import("api.zig").package_name;
 const MAX_BITSIZE = @bitSizeOf(usize);
 const MAX_OFFSET = @bitSizeOf(usize) - 1;
 
+
 pub const StorageMode = enum(u2) {
     pointer = 0, // Object pointer
     static = 1, // Takes a fixed width of a slot
@@ -48,15 +49,36 @@ pub const MemberInfo = packed struct {
     // It is up to the member whether these is used or not
     optional: bool = false,
     coerce: bool = false,
-    padding: u31 = 0,
+    resolved: bool = false,
+    typeid: u5 = 0,
+    padding: u25 = 0,
 };
+
+pub const Validator = *const fn (*MemberBase, *AtomBase, *Object, *Object) py.Error!*Object;
+
+fn initValidators() [32]?Validator {
+    comptime {
+        var validators: [32]?Validator = [_]?Validator{null} ** 32;
+        validators[0] = &MemberBase.validateGeneric;
+        for (all_modules) |mod| {
+            if (@hasDecl(mod, "all_members")) {
+                for (mod.all_members) |m| {
+                    validators[m.typeid] = &m.validateGeneric;
+                }
+            }
+        }
+        return validators;
+    }
+}
+
+pub var all_validators: [32]?Validator = initValidators();
+
 
 // Base Member class
 pub const MemberBase = extern struct {
     // Reference to the type. This is set in ready
     pub var TypeObject: ?*Type = null;
     const Self = @This();
-    pub const Validator = *const fn (*MemberBase, *AtomBase, *Object, *Object) py.Error!void;
 
     base: Object,
     metadata: ?*Dict = null,
@@ -373,12 +395,33 @@ pub const MemberBase = extern struct {
     // --------------------------------------------------------------------------
     // Internal api
     // --------------------------------------------------------------------------
-    pub fn validate(_: *Self, _: *AtomBase, _: *Object, _: *Object) py.Error!void {
-        // do nothing
+    pub fn validateGeneric(_: *Self, _: *AtomBase, _: *Object, newvalue: *Object) py.Error!*Object {
+        return newvalue.newref();
+    }
+
+    pub inline fn validate(self: *Self, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
+//         if (all_validators[self.info.typeid]) |validator| {
+//             return validator(self, atom, oldvalue, newvalue);
+//         }
+        @setEvalBranchQuota(10000);
+        inline for (all_modules) |mod| {
+            if (comptime @hasDecl(mod, "all_members")) {
+                inline for (mod.all_members) |M| {
+                    if (self.info.typeid == M.typeid) {
+                        return M.validate(@ptrCast(self), atom, oldvalue, newvalue);
+                    }
+                }
+            }
+        }
+        if (self.info.typeid == 0) {
+            return newvalue.newref();
+        }
+        try py.systemError("missing validator", .{});
+        unreachable;
     }
 
     // Helper function for validation failures
-    pub fn validateFail(self: *Self, atom: *AtomBase, value: *Object, expected: [:0]const u8) py.Error!void {
+    pub inline fn validateFail(self: *const Self, atom: *AtomBase, value: *Object, expected: [:0]const u8) py.Error!void {
         // TODO: include name of "owner"
         return py.typeError("The '{s}' member on the '{s}' object must be of type '{s}'. Got object of type '{s}' instead", .{
             self.name.data(),
@@ -388,7 +431,7 @@ pub const MemberBase = extern struct {
         });
     }
 
-    pub fn validateTypeOrTupleOfTypes(self: *Self, kind: *Object) py.Error!void {
+    pub fn validateTypeOrTupleOfTypes(self: *const Self, kind: *Object) py.Error!void {
         if (Type.check(kind)) {
             return;
         } else if (Tuple.check(kind)) {
@@ -545,6 +588,32 @@ pub const MemberBase = extern struct {
         return @as(usize, @as(usize, 1) << pos);
     }
 
+    // Generic implementation to generate the default value
+    // The impl can override per mode as needed.
+    // Returns new reference
+    pub inline fn default(self: *MemberBase, comptime impl: type, atom: *AtomBase) !*Object {
+        switch (self.info.default_mode) {
+            .static => {
+                if (comptime @hasDecl(impl, "defaultStatic")) {
+                    return impl.defaultStatic(self, atom);
+                }
+                if (self.default_context) |value| {
+                    return value.newref();
+                }
+                return py.returnNone();
+            },
+            .call => {
+                if (comptime @hasDecl(impl, "defaultCall")) {
+                    return impl.defaultCall(self, atom);
+                }
+                if (self.default_context) |callable| {
+                    return callable.callArgs(.{});
+                }
+                try py.systemError("default context missing", .{});
+                unreachable;
+            },
+        }
+    }
     // --------------------------------------------------------------------------
     // Type def
     // --------------------------------------------------------------------------
@@ -631,14 +700,18 @@ pub const MemberBase = extern struct {
     }
 };
 
+
 // Create a member subclass with the given mode
-pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
+pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: type) type {
+
     return extern struct {
         pub var TypeObject: ?*Type = null;
         pub const TypeName = type_name;
         pub const Impl = impl;
         pub const storage_mode: StorageMode = if (@hasDecl(impl, "storage_mode")) impl.storage_mode else .pointer;
+        pub const typeid = id;
         const Self = @This();
+
 
         base: MemberBase,
 
@@ -654,28 +727,11 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         // Custom member api
         // --------------------------------------------------------------------------
         // Returns new reference
-        pub fn default(self: *Self, atom: *AtomBase) !*Object {
-            switch (self.base.info.default_mode) {
-                .static => {
-                    if (comptime @hasDecl(impl, "defaultStatic")) {
-                        return impl.defaultStatic(@ptrCast(self), atom);
-                    }
-                    if (self.base.default_context) |value| {
-                        return value.newref();
-                    }
-                    return py.returnNone();
-                },
-                .call => {
-                    if (comptime @hasDecl(impl, "defaultCall")) {
-                        return impl.defaultCall(self, atom);
-                    }
-                    if (self.base.default_context) |callable| {
-                        return callable.callArgs(.{});
-                    }
-                    try py.systemError("default context missing", .{});
-                    unreachable;
-                },
+        pub inline fn default(self: *Self, atom: *AtomBase) !*Object {
+            if (comptime @hasDecl(impl, "default")) {
+                return impl.default(@ptrCast(self), atom);
             }
+            return self.base.default(impl, atom);
         }
 
         // Default write slot implementation. It does not need to worry about discarding the old value but must
@@ -767,18 +823,15 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                         return v;
                     }
                 }
-                const default_handler = comptime if (@hasDecl(impl, "default")) impl.default else Self.default;
-                var value = try default_handler(@ptrCast(self), atom);
-                if (comptime @hasDecl(impl, "coerce")) {
-                    py.setref(&value, try impl.coerce(@ptrCast(self), atom, value));
-                }
+                const default_value = try self.default(atom);
+                defer default_value.decref();
 
                 // We must track whether the write took ownership of the default value
                 // becuse it is needed in notify create. If the writeSlot says it took ownership
                 // of the value then we do not need to decref it. If an error occurs it gets decref'd
                 var value_ownership: Ownership = .borrowed;
+                const value = try self.validate(atom, py.None(), default_value);
                 defer if (value_ownership == .borrowed) value.decref();
-                try self.validate(atom, py.None(), value);
                 value_ownership = try writeSlot(@ptrCast(self), atom, ptr, value); // Default returns a new object
                 try self.base.notifyCreate(atom, value);
                 return value.newref();
@@ -796,29 +849,25 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
                     // @branchHint(.unlikely);
                     return py.attributeError("Can't set attribute of frozen Atom", .{});
                 }
-                const coerced = comptime @hasDecl(impl, "coerce");
-                const value =
-                    if (coerced)
-                    try impl.coerce(@ptrCast(self), atom, newvalue)
-                else
-                    newvalue;
-                defer if (coerced) value.decref(); // if coerced, it's always a new ref that must be released
 
+                // If writeSlot does not take Ownership of the value then
+                // we need to decref the validated/coerced result
+                var value_ownership: Ownership = .borrowed;
                 if (try readSlot(@ptrCast(self), atom, ptr)) |old| {
-                    defer if (storage_mode != .pointer) {
+                    defer if (storage_mode == .static) {
                         old.decref(); // Always decref if static
                     };
-                    try self.validate(atom, old, value);
-                    const r = try writeSlot(@ptrCast(self), atom, ptr, value.newref());
+                    const value = try self.validate(atom, old, newvalue);
+                    defer if (value_ownership == .borrowed) value.decref();
+                    value_ownership = try writeSlot(@ptrCast(self), atom, ptr, value);
                     defer if (storage_mode == .pointer) {
                         old.decref(); // Only decref after write completes
                     };
-                    defer if (r == .borrowed) value.decref();
                     try self.base.notifyUpdate(atom, old, value);
                 } else {
-                    try self.validate(atom, py.None(), value);
-                    const r = try writeSlot(@ptrCast(self), atom, ptr, value.newref());
-                    defer if (r == .borrowed) value.decref();
+                    const value = try self.validate(atom, py.None(), newvalue);
+                    defer if (value_ownership == .borrowed) value.decref();
+                    value_ownership = try writeSlot(@ptrCast(self), atom, ptr, value);
                     try self.base.notifyCreate(atom, value);
                 }
 
@@ -848,20 +897,34 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
             }
         }
 
-        pub inline fn validate(self: *Self, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) py.Error!void {
-            return validateInternal(@ptrCast(self), atom, oldvalue, newvalue);
+        pub fn validateGeneric(self: *MemberBase, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
+            return validate(@ptrCast(self), atom, oldvalue, newvalue);
         }
 
-        pub fn validateInternal(self: *MemberBase, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) py.Error!void {
-            if (comptime @hasDecl(impl, "validate")) {
+        pub inline fn validate(self: *Self, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
+            if (comptime @hasDecl(impl, "coerce") and @hasDecl(impl, "validate")) {
+                const coerced = try impl.coerce(@ptrCast(self), atom, oldvalue, newvalue);
+                defer coerced.decref();
+                return impl.validate(@ptrCast(self), atom, oldvalue, coerced);
+            } else if (comptime @hasDecl(impl, "coerce")) {
+                return impl.coerce(@ptrCast(self), atom, oldvalue, newvalue);
+            } else if (comptime @hasDecl(impl, "validate")) {
                 return impl.validate(@ptrCast(self), atom, oldvalue, newvalue);
+            } else {
+                return newvalue.newref();
             }
-            // else do nothing
         }
 
         // --------------------------------------------------------------------------
         // Type def
         // --------------------------------------------------------------------------
+        pub fn new(cls: *Type, args: *Tuple, kwargs: ?*Dict) ?*Self {
+            const self: *Self = @ptrCast(cls.genericNew(args, kwargs) catch return null);
+            self.base.name = undefined_str.?.newref();
+            self.base.info.typeid = typeid;
+            return self;
+        }
+
         pub fn init(self: *Self, args: *Tuple, kwargs: ?*Dict) c_int {
             if (comptime @hasDecl(impl, "default_mode")) {
                 self.base.info.default_mode = impl.default_mode;
@@ -929,6 +992,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime impl: type) type {
         }
 
         const type_slots = [_]py.TypeSlot{
+            .{ .slot = py.c.Py_tp_new, .pfunc = @constCast(@ptrCast(&new)) },
             .{ .slot = py.c.Py_tp_init, .pfunc = @constCast(@ptrCast(&init)) },
             .{ .slot = py.c.Py_tp_descr_get, .pfunc = @constCast(@ptrCast(&__get__)) },
             .{ .slot = py.c.Py_tp_descr_set, .pfunc = @constCast(@ptrCast(&__set__)) },
@@ -964,24 +1028,11 @@ const all_modules = .{
     @import("members/event.zig"),
 };
 
-// Lookup the validate function for a member at runtime
-pub fn dynamicValidate(member: *MemberBase) py.Error!MemberBase.Validator {
-    inline for (all_modules) |mod| {
-        if (comptime @hasDecl(mod, "all_members")) {
-            inline for (mod.all_members) |MemberSubclass| {
-                if (MemberSubclass.check(@ptrCast(member))) {
-                    return &MemberSubclass.validateInternal;
-                }
-            }
-        }
-    }
-    if (MemberBase.check(@ptrCast(member))) {
-        return &MemberBase.validate;
-    }
-    try py.typeError("Invalid argument to dynamic validate", .{});
-}
-
 const all_strings = .{ "undefined", "type", "object", "name", "value", "oldvalue", "key", "create", "update", "delete", "item" };
+//
+//
+
+
 
 pub fn initModule(mod: *py.Module) !void {
     // Strings used to create the change dicts

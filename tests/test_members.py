@@ -13,12 +13,14 @@ from zatom.api import (
     TypedList,
     TypedSet,
     Instance,
+    ForwardInstance,
     Int,
     Member,
     Str,
     Set,
     Tuple,
     Typed,
+    ForwardTyped,
     Value,
 )
 
@@ -209,6 +211,21 @@ def test_instance():
     with pytest.raises(TypeError):
         a.cls = {}
 
+def test_forward_instance():
+    class A(Atom):
+        other = ForwardInstance(lambda: C, ())
+
+    class B(Atom):
+        name = Str()
+
+    class C(Atom):
+        bar = Str()
+
+    a = A()
+    assert type(a.other) == C
+    with pytest.raises(TypeError):
+        a.other = B()
+
 
 def test_typed():
     class A(Atom):
@@ -218,6 +235,22 @@ def test_typed():
     a.name = "x"
     with pytest.raises(TypeError):
         a.name = 1
+
+
+def test_forward_typed():
+    class A(Atom):
+        other = ForwardTyped(lambda: B, ())
+
+    class B(Atom):
+        name = Str()
+
+    class C(Atom):
+        name = Str()
+
+    a = A()
+    assert type(a.other) is B
+    with pytest.raises(TypeError):
+        a.other = C()
 
 
 def test_tuple():
@@ -364,6 +397,8 @@ def test_list():
 
     with pytest.raises(TypeError):
         a.c = [1]
+    with pytest.raises(TypeError):
+       a.c.append(3)
 
 
 def test_dict():
@@ -392,9 +427,8 @@ def test_dict():
     assert a.c == {1: [2]}
     a.c = {1: [1, 2]}
 
-    # TODO: Validateors might need to coerce...
-    # with pytest.raises(TypeError):
-    #    a.c[1].append('4')
+    with pytest.raises(TypeError):
+       a.c[1].append('4')
 
     with pytest.raises(TypeError):
         a.c = {1: 2}

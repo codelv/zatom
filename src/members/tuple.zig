@@ -9,7 +9,7 @@ const MemberBase = member.MemberBase;
 const Member = member.Member;
 const InstanceMember = @import("instance.zig").InstanceMember;
 
-pub const TupleMember = Member("Tuple", struct {
+pub const TupleMember = Member("Tuple", 15, struct {
 
     // Tuple takes an optional item, default, and factory
     pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
@@ -56,19 +56,23 @@ pub const TupleMember = Member("Tuple", struct {
         }
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
+    pub fn coerce(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
         if (!Tuple.check(new)) {
-            return self.validateFail(atom, new, "tuple");
+            try self.validateFail(atom, new, "tuple");
+            unreachable;
         }
         if (self.validate_context) |context| {
             const tuple: *Tuple = @ptrCast(new);
             const instance: *MemberBase = @ptrCast(context);
-            const validator = try member.dynamicValidate(instance);
             const n = try tuple.size();
+            const copy = try Tuple.new(n);
+            errdefer copy.decref();
             for (0..n) |i| {
-                try validator(instance, atom, py.None(), try tuple.get(i));
+                copy.setUnsafe(i, try instance.validate(atom, py.None(), tuple.getUnsafe(i).?));
             }
+            return @ptrCast(copy);
         }
+        return new.newref();
     }
 });
 

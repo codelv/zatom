@@ -12,7 +12,7 @@ const Member = member.Member;
 // functools.partial
 var partial: ?*Object = null;
 
-pub const InstanceMember = Member("Instance", struct {
+pub const InstanceMember = Member("Instance", 4, struct {
     // Instance takes a single argument kind which is passed to an Instance member
     // Must initalize the validate_context to an InstanceMember
     pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
@@ -79,25 +79,155 @@ pub const InstanceMember = Member("Instance", struct {
         }
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
         if (new.isNone() and self.info.optional) {
-            return; // Ok
+            return new.newref(); // Ok
         }
         const context = self.validate_context.?;
         if (!try new.isInstance(context)) {
             if (py.Tuple.check(context)) {
                 const types_str = try context.str();
                 defer types_str.decref();
-                return self.validateFail(atom, new, types_str.data());
+                try self.validateFail(atom, new, types_str.data());
             } else {
-                return self.validateFail(atom, new, Type.className(@ptrCast(context)));
+                try self.validateFail(atom, new, Type.className(@ptrCast(context)));
             }
-            return error.PyError;
+            unreachable;
         }
+        return new.newref();
     }
 });
 
-pub const ForwardInstanceMember = Member("ForwardInstance", struct {});
+pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
+    // Typed takes a single argument kind which is passed to an Instance member
+    // Must initalize the validate_context to an TypedMember
+    pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
+        const kwlist = [_:null][*c]const u8{
+            "resolve",
+            "args",
+            "kwargs",
+            "factory",
+            "optional",
+        };
+        var resolve_func: *Object = undefined;
+        var init_args: ?*Object = null;
+        var init_kwargs: ?*Object = null;
+        var factory: ?*Object = null;
+        var optional: ?*Object = null;
+        try py.parseTupleAndKeywords(args, kwargs, "O|OOOO", @ptrCast(&kwlist), .{ &resolve_func, &init_args, &init_kwargs, &factory, &optional });
+        if (!resolve_func.isCallable()) {
+            return py.typeError("resolve must be a callable that returns the type", .{});
+        }
+        self.validate_context = resolve_func.newref();
+        errdefer py.clear(&self.validate_context);
+
+        if (factory != null and !factory.?.isNone()) {
+            if (!factory.?.isCallable()) {
+                return py.typeError("factory must be callable", .{});
+            }
+            self.info.default_mode = .call;
+            self.default_context = factory.?.newref();
+        } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
+            self.info.default_mode = .call;
+
+            const partial_kwargs: *Object = blk: {
+                if (init_kwargs) |v| {
+                    if (Dict.check(v)) {
+                        break :blk v;
+                    } else if (!v.isNone()) {
+                        return py.typeError("Typed kwargs must be a dict or None, got: {s}", .{v.typeName()});
+                    }
+                }
+                break :blk py.None();
+            };
+
+            const partial_args: *Object = blk: {
+                if (init_args) |v| {
+                    if (Tuple.check(v)) {
+                        break :blk v;
+                    } else if (!v.isNone()) {
+                        return py.typeError("Typed args must be a tuple or None, got: {s}", .{v.typeName()});
+                    }
+                }
+                break :blk py.None();
+            };
+            // Make a tuple of (args, kwargs) to call with the resolved type
+            self.default_context = @ptrCast(try Tuple.packNewrefs(.{partial_args, partial_kwargs}));
+        } else {
+            self.default_context = py.returnNone();
+        }
+
+        // If a factory or init args were provided set to to not optional
+        // Unless explicitly defined as optional or not
+        if (py.notNone(optional)) {
+            self.info.optional = optional.?.isTrue();
+        } else {
+            self.info.optional = self.info.default_mode == .static;
+        }
+    }
+
+    pub fn resolve(self: *MemberBase, _: *AtomBase) !void {
+        if (self.validate_context == null) {
+            return py.systemError("Invalid resolve context", .{});
+        }
+        // Call the resolver
+        const resolver = self.validate_context.?;
+        const kind = try resolver.callArgs(.{});
+        defer kind.decref();
+        try self.validateTypeOrTupleOfTypes(kind);
+
+        // If the default context is a tuple of args, kwargs, make a partial
+        // with the resolved type
+        if (py.notNone(self.default_context) and Tuple.check(self.default_context.?)) {
+            const tuple: *Tuple = @ptrCast(self.default_context.?);
+            // These may be none
+            const args = tuple.getUnsafe(0).?;
+            const kwargs = tuple.getUnsafe(1).?;
+
+            const first_kind = if (Tuple.check(kind)) Tuple.getUnsafe(@ptrCast(kind), 0).? else kind;
+
+            const new_args = if (args.isNone()) try Tuple.packNewrefs(.{first_kind}) else try Tuple.prepend(@ptrCast(args), first_kind);
+            defer new_args.decref();
+            py.xsetref(&self.default_context, try partial.?.call(
+                new_args,
+                if (kwargs.isNone()) null else @ptrCast(kwargs)
+            ));
+        }
+
+        // Replace the resolver with the kind
+        py.xsetref(&self.validate_context, kind.newref());
+        self.info.resolved = true;
+    }
+
+    pub fn default(self: *MemberBase, atom: *AtomBase) !*Object {
+        if (!self.info.resolved) {
+            try resolve(self, atom);
+        }
+        return MemberBase.default(self, @This(), atom);
+    }
+
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
+        if (new.isNone() and self.info.optional) {
+            return new.newref(); // Ok
+        }
+        if (!self.info.resolved) {
+            try resolve(self, atom);
+        }
+        const context = self.validate_context.?;
+        if (!try new.isInstance(context)) {
+            if (py.Tuple.check(context)) {
+                const types_str = try context.str();
+                defer types_str.decref();
+                try self.validateFail(atom, new, types_str.data());
+            } else {
+                try self.validateFail(atom, new, Type.className(@ptrCast(context)));
+            }
+            unreachable;
+        }
+        return new.newref();
+    }
+
+});
 
 pub const all_members = .{
     InstanceMember,

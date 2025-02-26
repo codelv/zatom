@@ -139,7 +139,7 @@ pub const EventBinder = extern struct {
 };
 
 // The Event member takes no storage
-pub const EventMember = Member("Event", struct {
+pub const EventMember = Member("Event", 3, struct {
     // Event takes no storage slot
     pub const storage_mode: StorageMode = .none;
 
@@ -159,17 +159,19 @@ pub const EventMember = Member("Event", struct {
         return @ptrCast(try EventBinder.TypeObject.?.callArgs(.{ self, atom }));
     }
 
-    pub fn validate(self: *MemberBase, atom: *AtomBase, oldvalue: *Object, value: *Object) py.Error!void {
+    pub fn validate(self: *MemberBase, atom: *AtomBase, oldvalue: *Object, value: *Object) py.Error!*Object {
         if (self.validate_context) |context| {
             std.debug.assert(InstanceMember.check(context));
             const instance: *InstanceMember = @ptrCast(context);
-            try instance.validate(atom, oldvalue, value);
+            return try instance.validate(atom, oldvalue, value);
         }
+        return value.newref();
     }
 
-    pub fn setattr(self: *MemberBase, atom: *AtomBase, value: *Object) !void {
+    pub fn setattr(self: *MemberBase, atom: *AtomBase, newvalue: *Object) !void {
         if (self.shouldNotify(atom)) {
-            try validate(self, atom, py.None(), value);
+            const value = try validate(self, atom, py.None(), newvalue);
+            defer value.decref();
 
             var change = try Dict.new();
             defer change.decref();

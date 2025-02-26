@@ -12,7 +12,7 @@ const Member = member.Member;
 
 var default_str: ?*Str = null;
 
-pub const EnumMember = Member("Enum", struct {
+pub const EnumMember = Member("Enum", 2, struct {
     pub const storage_mode: StorageMode = .static;
 
     // Instance takes a single argument kind which is passed to an Instance member
@@ -56,15 +56,17 @@ pub const EnumMember = Member("Enum", struct {
         return value.newref();
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
+    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
         const items: *Tuple = @ptrCast(self.validate_context.?);
         if (!try items.contains(new)) {
-            return py.valueError("invalid enum value for '{s}' of '{s}'. Got '{s}'", .{
+            try py.valueError("invalid enum value for '{s}' of '{s}'. Got '{s}'", .{
                 self.name.data(),
                 atom.typeName(),
                 new.typeName(),
             });
+            unreachable;
         }
+        return new.newref();
     }
 });
 

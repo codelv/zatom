@@ -19,8 +19,6 @@ pub const TypedDict = extern struct {
 
     base: Dict,
     validate_context: ?*Tuple = null, // tuple[Optional[MemberBase], Optional[MemberBase], AtomBase]
-    key_validator: ?MemberBase.Validator = null, // TODO: Consider eliminating this
-    value_validator: ?MemberBase.Validator = null, // TODO: Consider eliminating this
 
     pub usingnamespace py.ObjectProtocol(Self);
 
@@ -59,8 +57,11 @@ pub const TypedDict = extern struct {
 
     pub fn assign_subscript(self: *Self, key: *Object, value: ?*Object) c_int {
         if (value) |item| {
-            self.validateKey(item) catch return -1;
-            self.validateValue(item) catch return -1;
+            const newkey = self.validateKey(item) catch return -1;
+            defer newkey.decref();
+            const newvalue = self.validateValue(item) catch return -1;
+            defer newvalue.decref();
+            return py.c.PyDict_Type.tp_as_mapping.*.mp_ass_subscript.?(@ptrCast(self), @ptrCast(newkey), @ptrCast(newvalue));
         }
         return py.c.PyDict_Type.tp_as_mapping.*.mp_ass_subscript.?(@ptrCast(self), @ptrCast(key), @ptrCast(value));
     }
@@ -77,8 +78,6 @@ pub const TypedDict = extern struct {
             try py.typeError("Cannot create TypedDict with no validators. Use a normal dict", .{});
         }
 
-        const key_validator = if (key_member.isNone()) null else try member.dynamicValidate(key_member);
-        const value_validator = if (value_member.isNone()) null else try member.dynamicValidate(value_member);
         if (!Dict.check(items)) {
             if (!key_member.isNone()) {
                 try key_member.validateFail(atom, items, "dict");
@@ -87,30 +86,36 @@ pub const TypedDict = extern struct {
             }
             unreachable;
         }
-        // Validate the items
-        const dict: *Dict = @ptrCast(items);
+        const self: *Self = @ptrCast(try TypeObject.?.callArgs(.{}));
+        errdefer self.decref();
+        self.validate_context = try Tuple.packNewrefs(.{ key_member, value_member, atom });
+
         var pos: isize = 0;
-        if (key_validator != null and value_validator != null) {
+        var dict: *Dict = @ptrCast(items);
+        if (!key_member.isNone() and  !value_member.isNone()) {
             while (dict.next(&pos)) |entry| {
-                try key_validator.?(key_member, atom, py.None(), entry.key);
-                try value_validator.?(value_member, atom, py.None(), entry.value);
+                const key = try key_member.validate(atom, py.None(), entry.key);
+                defer key.decref();
+                const value = try value_member.validate(atom, py.None(), entry.value);
+                defer value.decref();
+                try self.base.set(key, value);
             }
-        } else if (key_validator) |validator| {
+        } else if (!key_member.isNone()) {
             while (dict.next(&pos)) |entry| {
-                try validator(key_member, atom, py.None(), entry.key);
+                const key = try key_member.validate(atom, py.None(), entry.key);
+                defer key.decref();
+                try self.base.set(key, entry.value);
             }
-        } else if (value_validator) |validator| {
+        } else if (!value_member.isNone()) {
             while (dict.next(&pos)) |entry| {
-                try validator(value_member, atom, py.None(), entry.value);
+                const value = try value_member.validate(atom, py.None(), entry.value);
+                defer value.decref();
+                try self.base.set(entry.key, value);
             }
+        } else {
+            unreachable;
         }
 
-        const context = try Tuple.packNewrefs(.{ key_member, value_member, atom });
-        errdefer context.decref();
-        const self = try newNoContext(items);
-        self.key_validator = key_validator;
-        self.value_validator = value_validator;
-        self.validate_context = context;
         return @ptrCast(self);
     }
 
@@ -121,22 +126,26 @@ pub const TypedDict = extern struct {
         return false;
     }
 
-    pub inline fn validateKey(self: *Self, key: *Object) !void {
-        if (self.key_validator) |validator| {
-            const tuple = self.validate_context.?;
+    pub inline fn validateKey(self: *Self, key: *Object) py.Error!*Object {
+        if (self.validate_context) |tuple| {
             const key_member: *MemberBase = @ptrCast(tuple.getUnsafe(0).?);
-            const atom: *AtomBase = @ptrCast(tuple.getUnsafe(2).?);
-            try validator(key_member, atom, py.None(), key);
+            if (!key_member.isNone()) {
+                const atom: *AtomBase = @ptrCast(tuple.getUnsafe(2).?);
+                return try key_member.validate(atom, py.None(), key);
+            }
         }
+        return key.newref();
     }
 
-    pub inline fn validateValue(self: *Self, value: *Object) !void {
-        if (self.value_validator) |validator| {
-            const tuple = self.validate_context.?;
+    pub inline fn validateValue(self: *Self, value: *Object) py.Error!*Object {
+        if (self.validate_context) |tuple| {
             const value_member: *MemberBase = @ptrCast(tuple.getUnsafe(1).?);
-            const atom: *AtomBase = @ptrCast(tuple.getUnsafe(2).?);
-            try validator(value_member, atom, py.None(), value);
+            if (!value_member.isNone()) {
+                const atom: *AtomBase = @ptrCast(tuple.getUnsafe(2).?);
+                return try value_member.validate(atom, py.None(), value);
+            }
         }
+        return value.newref();
     }
 
     // --------------------------------------------------------------------------
@@ -192,7 +201,7 @@ pub const TypedDict = extern struct {
     }
 };
 
-pub const DictMember = Member("Dict", struct {
+pub const DictMember = Member("Dict", 1, struct {
 
     // Dict takes an optional item, default, and factory
     pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
@@ -277,7 +286,7 @@ pub const DictMember = Member("Dict", struct {
         unreachable;
     }
 
-    pub fn coerce(self: *MemberBase, atom: *AtomBase, value: *Object) !*Object {
+    pub fn coerce(self: *const MemberBase, atom: *AtomBase, _: *Object, value: *Object) py.Error!*Object {
         if (self.validate_context) |context| {
             const tuple: *Tuple = @ptrCast(context);
             const k = tuple.getUnsafe(0).?;
@@ -296,43 +305,6 @@ pub const DictMember = Member("Dict", struct {
         unreachable;
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
-        if (TypedDict.check(new)) {
-            return; // Already validated by dict
-        }
-        if (!Dict.check(new)) {
-            return self.validateFail(atom, new, "dict");
-        }
-        if (self.validate_context) |context| {
-            const tuple: *Tuple = @ptrCast(context);
-            const key_member = try tuple.get(0);
-            const value_member = try tuple.get(1);
-            const dict: *Dict = @ptrCast(new);
-            const key_val = if (key_member.isNone()) null else try member.dynamicValidate(@ptrCast(key_member));
-            const value_val = if (value_member.isNone()) null else try member.dynamicValidate(@ptrCast(value_member));
-
-            var pos: isize = 0;
-            if (key_val != null and value_val != null) {
-                while (dict.next(&pos)) |entry| {
-                    // entry is borrowed, do not decref
-                    try key_val.?(@ptrCast(key_member), atom, py.None(), entry.key);
-                    try value_val.?(@ptrCast(value_member), atom, py.None(), entry.value);
-                }
-            } else if (key_val) |validator| {
-                while (dict.next(&pos)) |entry| {
-                    // entry is borrowed, do not decref
-                    try validator(@ptrCast(key_member), atom, py.None(), entry.key);
-                }
-            } else if (value_val) |validator| {
-                while (dict.next(&pos)) |entry| {
-                    try validator(@ptrCast(value_member), atom, py.None(), entry.value);
-                }
-            } else {
-                try py.systemError("internal validation error", .{});
-                unreachable;
-            }
-        }
-    }
 });
 
 pub const all_members = .{

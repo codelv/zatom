@@ -22,7 +22,6 @@ pub const TypedSet = extern struct {
 
     base: Set,
     validate_context: ?*Tuple = null, // tuple[MemberBase, AtomBase]
-    validator: ?MemberBase.Validator = null, // TODO: Consider eliminating this
 
     pub usingnamespace py.ObjectProtocol(Self);
 
@@ -35,57 +34,61 @@ pub const TypedSet = extern struct {
     // Methods
     // --------------------------------------------------------------------------
     pub fn add(self: *Self, item: *Object) ?*Object {
-        self.validateItem(item) catch return null;
-        Set.add(@ptrCast(self), @ptrCast(item)) catch return null;
+        const new = self.validateItem(item) catch return null;
+        defer new.decref();
+        self.base.add(new) catch return null;
         return py.returnNone();
     }
 
     pub fn symmetric_difference_update(self: *Self, other: *Object) ?*Object {
-        if (Set.checkAny(other)) {
-            return self.isub(other);
-        }
-        const coerced = Set.new(other) catch return null;
-        defer coerced.decref();
-        return self.isub(@ptrCast(coerced));
+        const new = self.validateIterable(other) catch return null;
+        defer new.decref();
+        return @ptrCast(py.c.PySet_Type.tp_as_number.*.nb_inplace_subtract.?(@ptrCast(self), @ptrCast(new)));
     }
 
     pub fn update(self: *Self, args: *Tuple) ?*Object {
         const n = args.size() catch return null;
+        const new_args = Tuple.new(n + 1) catch return null;
+        defer new_args.decref();
+        new_args.setUnsafe(0, @ptrCast(self.newref()));
         for (0..n) |i| {
             const item = args.getUnsafe(i).?;
-            self.validateIterable(item) catch return null;
+            const value = self.validateIterable(item) catch return null;
+            new_args.setUnsafe(i+1, value);
         }
-        const new_args = args.prepend(@ptrCast(self)) catch return null;
-        defer new_args.decref();
         return set_update_method.?.call(new_args, null) catch null;
     }
 
     pub fn iand(self: *Self, other: *Object) ?*Object {
         if (!Set.checkAny(other))
             return py.returnNotImplemented();
-        self.validateIterable(other) catch return null;
-        return @ptrCast(py.c.PySet_Type.tp_as_number.*.nb_inplace_and.?(@ptrCast(self), @ptrCast(other)));
+        const new = self.validateIterable(other) catch return null;
+        defer new.decref();
+        return @ptrCast(py.c.PySet_Type.tp_as_number.*.nb_inplace_and.?(@ptrCast(self), @ptrCast(new)));
     }
 
     pub fn isub(self: *Self, other: *Object) ?*Object {
         if (!Set.checkAny(other))
             return py.returnNotImplemented();
-        self.validateIterable(other) catch return null;
-        return @ptrCast(py.c.PySet_Type.tp_as_number.*.nb_inplace_subtract.?(@ptrCast(self), @ptrCast(other)));
+        const new = self.validateIterable(other) catch return null;
+        defer new.decref();
+        return @ptrCast(py.c.PySet_Type.tp_as_number.*.nb_inplace_subtract.?(@ptrCast(self), @ptrCast(new)));
     }
 
     pub fn ixor(self: *Self, other: *Object) ?*Object {
         if (!Set.checkAny(other))
             return py.returnNotImplemented();
-        self.validateIterable(other) catch return null;
-        return @ptrCast(py.c.PySet_Type.tp_as_number.*.nb_inplace_xor.?(@ptrCast(self), @ptrCast(other)));
+        const new = self.validateIterable(other) catch return null;
+        defer new.decref();
+        return @ptrCast(py.c.PySet_Type.tp_as_number.*.nb_inplace_xor.?(@ptrCast(self), @ptrCast(new)));
     }
 
     pub fn ior(self: *Self, other: *Object) ?*Object {
         if (!Set.checkAny(other))
             return py.returnNotImplemented();
-        self.validateIterable(other) catch return null;
-        return @ptrCast(py.c.PySet_Type.tp_as_number.*.nb_inplace_or.?(@ptrCast(self), @ptrCast(other)));
+        const new = self.validateIterable(other) catch return null;
+        defer new.decref();
+        return @ptrCast(py.c.PySet_Type.tp_as_number.*.nb_inplace_or.?(@ptrCast(self), @ptrCast(new)));
     }
 
     // --------------------------------------------------------------------------
@@ -96,20 +99,12 @@ pub const TypedSet = extern struct {
     }
 
     pub fn newWithContext(items: *Object, validate_member: *MemberBase, atom: *AtomBase) !*TypedSet {
-        const validator = try member.dynamicValidate(validate_member);
-
-        // Validate the items
-        const iter = try items.iter();
-        while (try iter.next()) |item| {
-            defer item.decref();
-            try validator(validate_member, atom, py.None(), item);
+        const self: *TypedSet = @ptrCast(try TypeObject.?.callArgs(.{}));
+        errdefer self.decref();
+        self.validate_context = try Tuple.packNewrefs(.{ validate_member, atom });
+        if (self.ior(items) == null) {
+            return error.PyError;
         }
-
-        const context = try Tuple.packNewrefs(.{ validate_member, atom });
-        errdefer context.decref();
-        const self = try newNoContext(items);
-        self.validator = validator;
-        self.validate_context = context;
         return @ptrCast(self);
     }
 
@@ -120,22 +115,28 @@ pub const TypedSet = extern struct {
         return validate_member == null;
     }
 
-    pub inline fn validateItem(self: *Self, item: *Object) !void {
-        const tuple = self.validate_context orelse return;
+    pub inline fn validateItem(self: *Self, item: *Object) py.Error!*Object {
+        const tuple = self.validate_context orelse return item.newref();
         const mem: *MemberBase = @ptrCast(tuple.getUnsafe(0).?);
         const atom: *AtomBase = @ptrCast(tuple.getUnsafe(1).?);
-        try self.validator.?(mem, atom, py.None(), item);
+        return try mem.validate(atom, py.None(), item);
     }
 
-    pub fn validateIterable(self: *Self, items: *Object) !void {
-        const tuple = self.validate_context orelse return;
+    pub fn validateIterable(self: *Self, items: *Object) py.Error!*Object {
+        const tuple = self.validate_context orelse return items.newref();
         const mem: *MemberBase = @ptrCast(tuple.getUnsafe(0).?);
         const atom: *AtomBase = @ptrCast(tuple.getUnsafe(1).?);
         const iter = try items.iter();
+        defer iter.decref();
+        const copy = try Set.new(null);
+        errdefer copy.decref();
         while (try iter.next()) |item| {
             defer item.decref();
-            try self.validator.?(mem, atom, py.None(), item);
+            const new = try mem.validate(atom, py.None(), item);
+            defer new.decref();
+            try copy.add(new);
         }
+        return @ptrCast(copy);
     }
 
     // --------------------------------------------------------------------------
@@ -196,7 +197,7 @@ pub const TypedSet = extern struct {
     }
 };
 
-pub const SetMember = Member("Set", struct {
+pub const SetMember = Member("Set", 14, struct {
 
     // Set takes an optional item, default, and factory
     pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
@@ -255,7 +256,7 @@ pub const SetMember = Member("Set", struct {
         unreachable;
     }
 
-    pub fn coerce(self: *MemberBase, atom: *AtomBase, value: *Object) !*Object {
+    pub fn coerce(self: *MemberBase, atom: *AtomBase, _: *Object, value: *Object) py.Error!*Object {
         if (self.validate_context) |validate_member| {
             if (TypedSet.check(value)) {
                 const typed_set: *TypedSet = @ptrCast(value);
@@ -269,27 +270,6 @@ pub const SetMember = Member("Set", struct {
         }
         try self.validateFail(atom, value, "set");
         unreachable;
-    }
-
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!void {
-        if (TypedSet.check(new)) {
-            return; // Set should already be validated
-        }
-        if (!Set.check(new)) {
-            return self.validateFail(atom, new, "set");
-        }
-        if (self.validate_context) |context| {
-            const obj: *Set = @ptrCast(new);
-            // TODO: How expensive is this???
-            const instance: *MemberBase = @ptrCast(context);
-            const validator = try member.dynamicValidate(instance);
-
-            const iter = try obj.iter();
-            while (try iter.next()) |item| {
-                defer item.decref();
-                try validator(instance, atom, py.None(), item);
-            }
-        }
     }
 });
 
