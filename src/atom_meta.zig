@@ -26,6 +26,46 @@ var slots_str: ?*Str = null;
 var weakref_str: ?*Str = null;
 const package_name = @import("api.zig").package_name;
 
+pub fn computeMemoryLayout(
+    member: *MemberBase,
+    slot_count: *usize,
+    slot_offset: *usize,
+    last_static_slot: *?usize
+) void {
+    const max_bits: usize = @bitSizeOf(usize);
+    switch (member.info.storage_mode) {
+        .pointer => {
+            member.info.index = @intCast(slot_count.*);
+            slot_count.* += 1;
+        },
+        .static => {
+            // Check if there is room in the last spot;
+            const space_remaining = max_bits -| slot_offset.*;
+            // The reason we add 2 is because we have to reservere 1
+            // extra bit to account for a "null" in order to
+            // preserve the `default` behavior
+            const bitsize = @as(usize, member.info.width) + 2;
+            const can_fit = bitsize < space_remaining;
+
+            if (last_static_slot.* == null or !can_fit) {
+                // Start a new static slot
+                member.info.index = @intCast(slot_count.*);
+                last_static_slot.* = slot_count.*;
+                member.info.offset = 0;
+                slot_offset.* = bitsize; // Reset slot offset
+                slot_count.* += 1; // This consumes a slot
+            } else {
+                // Reuse the space from the last static slot
+                member.info.index = @intCast(last_static_slot.*.?);
+                member.info.offset = @intCast(slot_offset.*);
+                slot_offset.* += bitsize;
+            }
+        },
+        .none => {}, // No-op
+    }
+
+}
+
 // A metaclass
 pub const AtomMeta = extern struct {
     // Reference to the type. This is set in ready
@@ -70,7 +110,7 @@ pub const AtomMeta = extern struct {
         const has_slots = dict.contains(@ptrCast(slots_str.?)) catch return null;
         if (!has_slots) {
             // Add __slots__ if not defined
-            var slots =
+            const slots =
                 if (enable_weakrefs)
                 Tuple.packNewrefs(.{weakref_str.?}) catch return null
             else
@@ -79,74 +119,72 @@ pub const AtomMeta = extern struct {
             dict.set(@ptrCast(slots_str.?), @ptrCast(slots)) catch return null;
         }
 
-        // TODO: Get members from bases
-
-        // Gather members from the class
-        var observers = List.new(0) catch return null;
-        defer observers.decref();
-        var members = Dict.new() catch return null;
-        defer members.decref();
-        var pos: isize = 0;
-        var slot_count: usize = 0;
-        var last_static_slot: ?usize = null;
-        const max_bits: usize = @bitSizeOf(usize);
-        var slot_offset: usize = 0;
-        while (dict.next(&pos)) |entry| {
-            if (MemberBase.check(entry.value) and Str.check(entry.key)) {
-                // TODO: Clone if a this is a base class member
-                const member: *MemberBase = @ptrCast(entry.value);
-                py.setref(@ptrCast(&member.name), @ptrCast(entry.key.newref()));
-                switch (member.info.storage_mode) {
-                    .pointer => {
-                        member.info.index = @intCast(slot_count);
-                        slot_count += 1;
-                    },
-                    .static => {
-                        // Check if there is room in the last spot;
-                        const space_remaining = max_bits -| slot_offset;
-                        // The reason we add 2 is because we have to reservere 1
-                        // extra bit to account for a "null" in order to
-                        // preserve the `default` behavior
-                        const bitsize = @as(usize, member.info.width) + 2;
-                        const can_fit = bitsize < space_remaining;
-
-                        if (last_static_slot == null or !can_fit) {
-                            // Start a new static slot
-                            member.info.index = @intCast(slot_count);
-                            last_static_slot = slot_count;
-                            member.info.offset = 0;
-                            slot_offset = bitsize; // Reset slot offset
-                            slot_count += 1; // This consumes a slot
-                        } else {
-                            // Reuse the space from the last static slot
-                            member.info.index = @intCast(last_static_slot.?);
-                            member.info.offset = @intCast(slot_offset);
-                            slot_offset += bitsize;
-                        }
-                    },
-                    .none => {}, // No-op
-                }
-                members.set(entry.key, @ptrCast(member)) catch return null;
-            } else if (ObserveHandler.check(entry.value) and Str.check(entry.key)) {
-                const observer: *ObserveHandler = @ptrCast(entry.value);
-                if (observer.func) |func| {
-                    observers.append(@ptrCast(observer)) catch return null;
-                    // Replace the observe handler with the original function
-                    // It's safe to modify the value of dict while iterating
-                    dict.set(entry.key, @ptrCast(func)) catch return null;
-                }
-            }
-        }
-
-        // Modify the bases to
+        // Modify the bases
         const num_bases = bases.size() catch return null;
         if (num_bases == 0) {
             return py.typeErrorObject(null, "AtomMeta must contain AtomBase", .{});
         }
 
-        const base = bases.get(0) catch return null; // Borrowed
-        if (!base.is(AtomBase.TypeObject)) {
-            return py.typeErrorObject(null, "AtomMeta must contain AtomBase", .{});
+        var inherited_members = AtomMembers{};
+        defer inherited_members.deinit(py.allocator);
+        const observers = List.new(0) catch return null;
+        defer observers.decref();
+        const members = Dict.new() catch return null;
+        defer members.decref();
+
+        // Track the largest base
+        var largest_base: ?*AtomMeta = null;
+        for (0..num_bases) |i| {
+            const base = bases.getUnsafe(i).?;
+            const is_atom_subclass = base.isSubclass(@ptrCast(AtomBase.TypeObject.?)) catch return null;
+            if (is_atom_subclass) {
+                const atom_base: *AtomMeta = @ptrCast(base);
+                if (atom_base.atom_members) |array| {
+                    inherited_members.insertSlice(py.allocator, 0, array.items) catch {
+                        return py.memoryErrorObject(null);
+                    };
+                }
+                if (largest_base == null or largest_base.?.slot_count < atom_base.slot_count) {
+                    largest_base = atom_base;
+                }
+            }
+        }
+        if (largest_base == null) {
+            return py.typeErrorObject(null, "AtomMeta must contain AtomBase or a subclass", .{});
+        }
+
+        // Gather members from the class
+        var slot_count: usize = 0;
+        {
+            var pos: isize = 0;
+            var last_static_slot: ?usize = null;
+            var slot_offset: usize = 0;
+            while (dict.next(&pos)) |entry| {
+                if (MemberBase.check(entry.value) and Str.check(entry.key)) {
+                    const member: *MemberBase = @ptrCast(entry.value);
+                    py.setref(@ptrCast(&member.name), @ptrCast(entry.key.newref()));
+                    computeMemoryLayout(member, &slot_count, &slot_offset, &last_static_slot);
+                    members.set(entry.key, @ptrCast(member)) catch return null;
+                } else if (ObserveHandler.check(entry.value) and Str.check(entry.key)) {
+                    const observer: *ObserveHandler = @ptrCast(entry.value);
+                    if (observer.func) |func| {
+                        observers.append(@ptrCast(observer)) catch return null;
+                        // Replace the observe handler with the original function
+                        // It's safe to modify the value of dict while iterating
+                        dict.set(entry.key, @ptrCast(func)) catch return null;
+                    }
+                }
+            }
+            for (inherited_members.items) |member| {
+                if (dict.get(@ptrCast(member.name)) != null) {
+                    continue; // Member redefined
+                }
+                const new_member: *MemberBase = @ptrCast(member.cloneInternal() catch return null);
+                defer new_member.decref();
+                computeMemoryLayout(new_member, &slot_count, &slot_offset, &last_static_slot);
+                dict.set(@ptrCast(new_member.name), @ptrCast(new_member)) catch return null;
+                members.set(@ptrCast(new_member.name), @ptrCast(new_member)) catch return null;
+            }
         }
 
         // Set to true if bases is redefined and we need to decref it
@@ -155,14 +193,16 @@ pub const AtomMeta = extern struct {
 
         if (slot_count > 1 and slot_count < atom.atom_types.len) {
             const slot_base = atom.atom_types[slot_count].?;
-            if (num_bases == 1) {
-                // Add the approprate base
+            if (largest_base.?.is(slot_base) or largest_base.?.slot_count >= slot_count) {
+                // No-op
+            } else if (num_bases == 1 and largest_base.?.is(AtomBase.TypeObject)) {
+                // Just replace AtomBase with the slot base
                 bases = Tuple.packNewrefs(.{slot_base}) catch return null;
                 owns_bases = true;
             } else {
-                bases = Tuple.copy(bases) catch return null;
+                // Use multiple inheritance to insert the slot base
+                bases = Tuple.append(bases, @ptrCast(slot_base)) catch return null;
                 owns_bases = true;
-                bases.set(0, @ptrCast(slot_base.newref())) catch return null;
             }
         } else if (slot_count >= atom.atom_types.len) {
             return py.typeErrorObject(null, "TODO: Dynamic slots", .{});

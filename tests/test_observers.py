@@ -117,8 +117,6 @@ def test_observe_extended_decorator():
     assert len(changes) == 4
     assert changes[-1] == {"type": "create", "name": "x", "object": a.pos, "value": 2}
 
-
-
     with pytest.raises(AttributeError):
         class B(Atom):
             pos = Typed(Pt, ())
