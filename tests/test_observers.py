@@ -1,3 +1,4 @@
+import pytest
 from zatom.api import Atom, Int, Typed, observe
 
 
@@ -74,6 +75,13 @@ def test_observe_decorator():
     assert len(changes) == 3
     assert changes[-1] == {"type": "delete", "name": "x", "object": a, "value": 1}
 
+    with pytest.raises(AttributeError):
+        class Pt(Atom):
+            x = Int()
+
+            @observe('missing')
+            def on_change(self, change):
+                pass
 
 def test_observe_extended_decorator():
     changes = []
@@ -94,6 +102,30 @@ def test_observe_extended_decorator():
     assert a.pos.has_observers('x')
     assert len(changes) == 1
     assert changes[-1] == {"type": "create", "name": "x", "object": a.pos, "value": 0}
+
+    a.pos.x = 1
+    assert len(changes) == 2
+    assert changes[-1] == {"type": "update", "name": "x", "object": a.pos, "oldvalue": 0, "value": 1}
+
+    del a.pos.x
+    assert len(changes) == 3
+    assert changes[-1] == {"type": "delete", "name": "x", "object": a.pos, "value": 1}
+
+    # a.pos = Pt(x=2) FIXME
+    a.pos = Pt()
+    a.pos.x = 2
+    assert len(changes) == 4
+    assert changes[-1] == {"type": "create", "name": "x", "object": a.pos, "value": 2}
+
+
+
+    with pytest.raises(AttributeError):
+        class B(Atom):
+            pos = Typed(Pt, ())
+
+            @observe('pos.missing')
+            def on_change(self, change):
+                pass
 
 
 def test_static_observe():

@@ -1,12 +1,15 @@
 const py = @import("../api.zig").py;
 const std = @import("std");
 const Object = py.Object;
+const Str = py.Str;
 const Tuple = py.Tuple;
 const Dict = py.Dict;
 const Type = py.Type;
 const AtomBase = @import("../atom.zig").AtomBase;
+const AtomMeta = @import("../atom_meta.zig").AtomMeta;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
+const Observable = member.Observable;
 const Member = member.Member;
 
 // functools.partial
@@ -79,6 +82,20 @@ pub const InstanceMember = Member("Instance", 4, struct {
         }
     }
 
+    pub fn checkTopic(self: *MemberBase, topic: *Str) !Observable {
+        if (self.validate_context) |kind| {
+            // If kind is an atom subclass
+            if (AtomMeta.check(kind)) {
+                const meta: *AtomMeta = @ptrCast(kind);
+                if (meta.getMember(topic)) |_| {
+                    return .yes;
+                }
+                return .no;
+            }
+        }
+        return .maybe; // Might be but IDK
+    }
+
     pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
         if (new.isNone() and self.info.optional) {
             return new.newref(); // Ok
@@ -99,6 +116,9 @@ pub const InstanceMember = Member("Instance", 4, struct {
 });
 
 pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
+    // Unfortunately this can't check until it's resolved
+    pub const observable: Observable = .maybe;
+
     // Typed takes a single argument kind which is passed to an Instance member
     // Must initalize the validate_context to an TypedMember
     pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {

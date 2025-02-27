@@ -39,6 +39,7 @@ pub const StorageMode = enum(u2) {
 
 pub const Ownership = enum(u1) { stolen = 0, borrowed = 1 };
 pub const DefaultMode = enum(u1) { static = 0, call = 1 };
+pub const Observable = enum(u2) { no = 0, yes = 1, maybe = 2 };
 
 pub const MemberInfo = packed struct {
     index: u16 = 0,
@@ -394,6 +395,21 @@ pub const MemberBase = extern struct {
         unreachable;
     }
 
+    // Check if this member can observe the given topic
+    // May return null if it cannot be known
+    pub fn checkTopic(self: *Self, topic: *Str) py.Error!Observable {
+        inline for (all_modules) |mod| {
+            if (comptime @hasDecl(mod, "all_members")) {
+                inline for (mod.all_members) |M| {
+                    if (self.info.typeid == M.typeid) {
+                        return M.checkTopic(@ptrCast(self), topic);
+                    }
+                }
+            }
+        }
+        return .maybe;
+    }
+
     // Helper function for validation failures
     pub inline fn validateFail(self: *const Self, atom: *AtomBase, value: *Object, expected: [:0]const u8) py.Error!void {
         // TODO: include name of "owner"
@@ -693,6 +709,17 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         // Type check the given object. This assumes the module was initialized
         pub fn check(obj: *Object) bool {
             return obj.typeCheck(TypeObject.?);
+        }
+
+        // Check if the topic is valid for observation
+        pub fn checkTopic(self: *Self, topic: *Str) py.Error!Observable {
+            if (comptime @hasDecl(impl, "checkTopic")) {
+                return impl.checkTopic(@ptrCast(self), topic);
+            }
+            if (comptime @hasDecl(impl, "observable")) {
+                return impl.observable;
+            }
+            return .no;
         }
 
         // --------------------------------------------------------------------------

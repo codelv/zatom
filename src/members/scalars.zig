@@ -5,6 +5,7 @@ const AtomBase = @import("../atom.zig").AtomBase;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
 const StorageMode = member.StorageMode;
+const Observable = member.Observable;
 const Member = member.Member;
 
 var empty_str: ?*py.Str = null;
@@ -12,6 +13,7 @@ var empty_bytes: ?*py.Bytes = null;
 
 // Does no validation at all
 pub const ValueMember = Member("Value", 7, struct {
+    pub const observable: Observable = .maybe;
     pub inline fn initDefault() !?*Object {
         return py.returnNone();
     }

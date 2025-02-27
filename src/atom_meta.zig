@@ -231,19 +231,15 @@ pub const AtomMeta = extern struct {
         return 0;
     }
 
+    // Return a new reference to the member with the given name
     pub fn get_member(self: *Self, name: *Object) ?*Object {
-        if (!Str.check(name))
+        if (!Str.check(name)) {
             return py.typeErrorObject(null, "Invalid arguments: Signature is get_member(name: str)", .{});
-        const member_name: *Str = @ptrCast(name);
-        if (self.atom_members) |members| {
-            for (members.items) |member| {
-                // Since names are interned they can be compared with pointers
-                if (member.name == member_name)
-                    return @ptrCast(member.newref());
-            }
-            return py.returnNone();
         }
-        return py.systemErrorObject(null, "Members are not initialized", .{});
+        if (self.getMember(@ptrCast(name))) |member| {
+            return @ptrCast(member.newref());
+        }
+        return py.returnNone();
     }
 
     pub fn get_slot_count(self: *Self) ?*Int {
@@ -269,24 +265,43 @@ pub const AtomMeta = extern struct {
                 const topic: *Str = @ptrCast(it);
 
                 if (try self.staticObserverPool()) |pool| {
-                    if (std.mem.indexOf(u8, topic.data(), ".")) |j| {
-                        const new_topic = try Str.fromSlice(topic.data()[0..j]);
+                    const data = topic.data();
+                    if (std.mem.indexOf(u8, data, ".")) |j| {
+                        std.debug.assert(j > 1 and j+1 < data.len);
+                        const new_topic = try Str.fromSlice(data[0..j]);
                         defer new_topic.decref();
-                        if (!try members.contains(@ptrCast(new_topic))) {
-                            return py.attributeError("observe target '{s}' is invalid. '{s}' has no member with that name", .{
+                        const target = members.get(@ptrCast(new_topic));
+                        if (target == null) {
+                            return py.attributeError("extended observe target '{s}' is invalid. '{s}' has no member with that name", .{
                                 new_topic.data(),
                                 self.typeName(),
                             });
                         }
-                        const attr = try Str.fromSlice(topic.data()[j..]);
+
+                        // The extended attr to observe
+                        const attr = try Str.fromSlice(data[j+1..]);
                         defer attr.decref();
+
+                        // Attempt to validate the attr at runtime
+                        switch(try MemberBase.checkTopic(@ptrCast(target.?), attr)) {
+                            .no => {
+                                return py.attributeError("extended observe target '{s}' is invalid. Attribute '{s}' on member '{s}' of '{s}' is not a valid", .{
+                                    data,
+                                    attr.data(),
+                                    new_topic.data(),
+                                    self.typeName()
+                                });
+                            },
+                            else => {}, // Can't tell
+                        }
+
                         const extended_observer = try ExtendedObserver.create(func, attr);
                         defer extended_observer.decref();
                         try pool.addObserver(py.allocator, new_topic, @ptrCast(extended_observer), observer.change_types);
                     } else {
-                        if (!try members.contains(@ptrCast(topic))) {
+                        if (members.get(@ptrCast(topic)) == null) {
                             return py.attributeError("observe target '{s}' is invalid. '{s}' has no member with that name", .{
-                                topic.data(),
+                                data,
                                 self.typeName(),
                             });
                         }
@@ -328,6 +343,20 @@ pub const AtomMeta = extern struct {
         }
         try py.systemError("No pool manager", .{});
         unreachable;
+    }
+
+    // Get borrowed reference to the member with the given name
+    // Assumes that name is already checked to be a Str and was interned
+    pub fn getMember(self: *Self, name: *Str) ?*MemberBase {
+        if (self.atom_members) |members| {
+            for (members.items) |member| {
+                // Since names are interned they can be compared with pointers
+                if (member.name == name) {
+                    return member;
+                }
+            }
+        }
+        return null;
     }
 
     // --------------------------------------------------------------------------

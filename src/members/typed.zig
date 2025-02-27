@@ -4,15 +4,19 @@ const Object = py.Object;
 const Tuple = py.Tuple;
 const Dict = py.Dict;
 const Type = py.Type;
+const Str = py.Str;
 const AtomBase = @import("../atom.zig").AtomBase;
+const AtomMeta = @import("../atom_meta.zig").AtomMeta;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
+const Observable = member.Observable;
 const Member = member.Member;
 
 // functools.partial
 var partial: ?*Object = null;
 
 pub const TypedMember = Member("Typed", 16, struct {
+
     // Typed takes a single argument kind which is passed to an Typed member
     // Must initalize the validate_context to an TypedMember
     pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
@@ -80,6 +84,19 @@ pub const TypedMember = Member("Typed", 16, struct {
         }
     }
 
+    pub fn checkTopic(self: *MemberBase, topic: *Str) !Observable {
+        if (self.validate_context) |kind| {
+            // If kind is an atom subclass
+            if (AtomMeta.check(kind)) {
+                const meta: *AtomMeta = @ptrCast(kind);
+                if (meta.getMember(topic)) |_| {
+                    return .yes;
+                }
+            }
+        }
+        return .no;
+    }
+
     pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
         if (new.isNone() and self.info.optional) {
             return new.newref(); // Ok
@@ -94,6 +111,9 @@ pub const TypedMember = Member("Typed", 16, struct {
 });
 
 pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
+    // Unfortunately this can't check until it's resolved
+    pub const observable: Observable = .maybe;
+
     // Typed takes a single argument kind which is passed to an Typed member
     // Must initalize the validate_context to an TypedMember
     pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {

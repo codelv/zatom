@@ -46,8 +46,12 @@ pub const ObserveHandler = extern struct {
             if (!name.typeCheckSelf()) {
                 return py.typeErrorObject(-1, "observe attribute name must be a string, got '{s}' instead", .{ name.typeName() });
             }
-            if (std.mem.count(u8, name.data(), ".") > 1) {
-                return py.typeErrorObject(-1, "cannot observe '{s}', only a single extension is allowed", .{ name.data() });
+
+            const data = name.data();
+            if (std.mem.indexOf(u8, data, ".")) |j| {
+                if (j <= 1 or j+1 >= data.len or std.mem.count(u8, data, ".") > 1) {
+                    return py.typeErrorObject(-1, "cannot observe '{s}', only a single extension with non-empty values is supported", .{ data });
+                }
             }
         }
         self.topics = args.newref();
@@ -238,37 +242,48 @@ pub const ExtendedObserver = extern struct {
         args.parseTyped(.{&change}) catch return null;
 
         const change_type = change.getOrError(@ptrCast(type_str.?)) catch return null;
+        const owner = change.getOrError(@ptrCast(object_str.?)) catch return null;
 
-        var oldvalue: *Object = py.None();
-        var newvalue: *Object = py.None();
+
+        var oldowner: *Object = py.None();
+        var newowner: *Object = py.None();
+//         var oldvalue: *Object = py.returnNone();
+//         defer oldvalue.decref();
+//         var newvalue: *Object = py.returnNone();
+//         defer newvalue.decref();
 
         if (change_type.is(create_str.?)) {
-            newvalue = change.getOrError(@ptrCast(value_str.?)) catch return null;
+            newowner = change.getOrError(@ptrCast(value_str.?)) catch return null;
         } else if (change_type.is(update_str.?)) {
-            oldvalue = change.getOrError(@ptrCast(oldvalue_str.?)) catch return null;
-            newvalue = change.getOrError(@ptrCast(value_str.?)) catch return null;
+            oldowner = change.getOrError(@ptrCast(oldvalue_str.?)) catch return null;
+            newowner = change.getOrError(@ptrCast(value_str.?)) catch return null;
         } else if (change_type.is(delete_str.?)) {
-            oldvalue = change.getOrError(@ptrCast(value_str.?)) catch return null;
+            oldowner = change.getOrError(@ptrCast(value_str.?)) catch return null;
+//             if (AtomBase.check(owner)) {
+//                 const atom: *AtomBase = @ptrCast(owner);
+//             }
         }
 
-//         const handler = owner.getAttr(self.funcname) catch return null;
-//         defer handler.decref();
-        // TODO: Attr might be invalid?
-        if (AtomBase.check(oldvalue) and self.meth != null) {
-            const atom: *AtomBase = @ptrCast(oldvalue);
+
+
+
+        if (AtomBase.check(oldowner) and self.meth != null) {
+            const atom: *AtomBase = @ptrCast(oldowner);
             atom.removeDynamicObserver(self.attr.?, @ptrCast(self.meth.?)) catch return null;
         }
-        if (AtomBase.check(newvalue)) {
-            const atom: *AtomBase = @ptrCast(newvalue);
-            const owner = change.getOrError(@ptrCast(object_str.?)) catch return null;
+        if (AtomBase.check(newowner)) {
+            const atom: *AtomBase = @ptrCast(newowner);
             py.xsetref(@ptrCast(&self.meth), @ptrCast(Method.new(self.func.?, owner) catch return null));
             atom.addDynamicObserver(self.attr.?, @ptrCast(self.meth.?), 0xff) catch return null;
-        } else if (!newvalue.isNone()) {
+        } else if (!newowner.isNone()) {
             return py.typeErrorObject(null, "cannot attach observer '{s}' to non-Atom '{s}", .{
                 self.attr.?.data(),
-                newvalue.typeName(),
+                newowner.typeName(),
             });
         }
+
+
+
         return py.returnNone();
     }
 
