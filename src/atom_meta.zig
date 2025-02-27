@@ -6,6 +6,7 @@ const Object = py.Object;
 const Str = py.Str;
 const Int = py.Int;
 const Dict = py.Dict;
+const List = py.List;
 const Tuple = py.Tuple;
 
 const atom = @import("atom.zig");
@@ -14,6 +15,10 @@ const MemberBase = @import("member.zig").MemberBase;
 const observer_pool = @import("observer_pool.zig");
 const PoolManager = observer_pool.PoolManager;
 const ObserverPool = observer_pool.ObserverPool;
+const observation = @import("observation.zig");
+const ObserveHandler = observation.ObserveHandler;
+const ExtendedObserver = observation.ExtendedObserver;
+const StaticObserver = observation.StaticObserver;
 
 // This is set at startup
 var atom_members_str: ?*Str = null;
@@ -77,6 +82,8 @@ pub const AtomMeta = extern struct {
         // TODO: Get members from bases
 
         // Gather members from the class
+        var observers = List.new(0) catch return null;
+        defer observers.decref();
         var members = Dict.new() catch return null;
         defer members.decref();
         var pos: isize = 0;
@@ -120,6 +127,14 @@ pub const AtomMeta = extern struct {
                     .none => {}, // No-op
                 }
                 members.set(entry.key, @ptrCast(member)) catch return null;
+            } else if (ObserveHandler.check(entry.value) and Str.check(entry.key)) {
+                const observer: *ObserveHandler = @ptrCast(entry.value);
+                if (observer.func) |func| {
+                    observers.append(@ptrCast(observer)) catch return null;
+                    // Replace the observe handler with the original function
+                    // It's safe to modify the value of dict while iterating
+                    dict.set(entry.key, @ptrCast(func)) catch return null;
+                }
             }
         }
 
@@ -167,9 +182,9 @@ pub const AtomMeta = extern struct {
             return null;
         }
         cls.slot_count = @intCast(slot_count);
-        // TODO: Lazy init this???
         cls.pool_manager = PoolManager.new(py.allocator) catch return null;
-        defer if (!ok) cls.pool_manager.?.deinit(py.allocator);
+        cls.initStaticObservers(observers, members) catch return null;
+
         ok = true;
         return @ptrCast(cls);
     }
@@ -238,6 +253,51 @@ pub const AtomMeta = extern struct {
     // --------------------------------------------------------------------------
     // Internal api
     // --------------------------------------------------------------------------
+    pub fn initStaticObservers(self: *Self, observers: *List, members: *Dict) !void {
+        var pos: usize = 0;
+        while (observers.next(&pos)) |item| {
+            std.debug.assert(ObserveHandler.check(item));
+            const observer: *ObserveHandler = @ptrCast(item);
+            if (observer.topics == null or observer.func == null) continue;
+            const func = observer.func.?;
+            const static_observer = try StaticObserver.create(func);
+            defer static_observer.decref();
+
+            var i: usize = 0;
+            while (observer.topics.?.next(&i)) |it| {
+                std.debug.assert(Str.check(it));
+                const topic: *Str = @ptrCast(it);
+
+                if (try self.staticObserverPool()) |pool| {
+                    if (std.mem.indexOf(u8, topic.data(), ".")) |j| {
+                        const new_topic = try Str.fromSlice(topic.data()[0..j]);
+                        defer new_topic.decref();
+                        if (!try members.contains(@ptrCast(new_topic))) {
+                            return py.attributeError("observe target '{s}' is invalid. '{s}' has no member with that name", .{
+                                new_topic.data(),
+                                self.typeName(),
+                            });
+                        }
+                        const attr = try Str.fromSlice(topic.data()[j..]);
+                        defer attr.decref();
+                        const extended_observer = try ExtendedObserver.create(func, attr);
+                        defer extended_observer.decref();
+                        try pool.addObserver(py.allocator, new_topic, @ptrCast(extended_observer), observer.change_types);
+                    } else {
+                        if (!try members.contains(@ptrCast(topic))) {
+                            return py.attributeError("observe target '{s}' is invalid. '{s}' has no member with that name", .{
+                                topic.data(),
+                                self.typeName(),
+                            });
+                        }
+                        try pool.addObserver(py.allocator, topic, @ptrCast(static_observer), observer.change_types);
+                    }
+                }
+            }
+
+        }
+    }
+
     // Validate the atom members dict and return the number of members
     pub fn validateMembers(self: *Self, members: *Dict) !u16 {
         _ = self;

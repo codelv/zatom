@@ -278,6 +278,7 @@ pub const ListMember = Member("List", 6, struct {
         unreachable;
     }
 
+    // This cannot be inlined
     pub fn coerce(self: *MemberBase, atom: *AtomBase, _: *Object, value: *Object) py.Error!*Object {
         if (self.validate_context) |validate_member| {
             if (TypedList.check(value)) {

@@ -357,7 +357,7 @@ pub const ObserverPool = struct {
         }
     }
 
-    pub fn notify(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, args: *Tuple, kwargs: ?*Dict, change_types: u8) py.Error!void {
+    pub fn notify(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, args: anytype, change_types: u8) py.Error!void {
         var ok: bool = true;
         if (self.map.getPtr(try topic.hash())) |observer_map| {
             var guard = PoolGuard.init(self, allocator);
@@ -371,7 +371,7 @@ pub const ObserverPool = struct {
             while (items.next()) |item| {
                 if (try item.observer.evalsTrue()) {
                     if (item.enabled(change_types)) {
-                        const result = try item.observer.call(args, kwargs);
+                        const result = try item.observer.callArgs(args);
                         result.decref();
                     }
                 } else {

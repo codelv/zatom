@@ -8,6 +8,7 @@ const std = @import("std");
 const member = @import("member.zig");
 const atom_meta = @import("atom_meta.zig");
 const atom = @import("atom.zig");
+const observation = @import("observation.zig");
 pub const package_name = "zatom";
 
 fn modexec(mod: *py.Module) !c_int {
@@ -17,6 +18,8 @@ fn modexec(mod: *py.Module) !c_int {
     errdefer atom_meta.deinitModule(mod);
     try atom.initModule(mod);
     errdefer atom.deinitModule(mod);
+    try observation.initModule(mod);
+    errdefer observation.deinitModule(mod);
     return 0;
 }
 

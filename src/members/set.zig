@@ -115,7 +115,7 @@ pub const TypedSet = extern struct {
         return validate_member == null;
     }
 
-    pub inline fn validateItem(self: *Self, item: *Object) py.Error!*Object {
+    pub fn validateItem(self: *Self, item: *Object) py.Error!*Object {
         const tuple = self.validate_context orelse return item.newref();
         const mem: *MemberBase = @ptrCast(tuple.getUnsafe(0).?);
         const atom: *AtomBase = @ptrCast(tuple.getUnsafe(1).?);

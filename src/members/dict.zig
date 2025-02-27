@@ -286,6 +286,7 @@ pub const DictMember = Member("Dict", 1, struct {
         unreachable;
     }
 
+    // This cannot be inlined
     pub fn coerce(self: *const MemberBase, atom: *AtomBase, _: *Object, value: *Object) py.Error!*Object {
         if (self.validate_context) |context| {
             const tuple: *Tuple = @ptrCast(context);

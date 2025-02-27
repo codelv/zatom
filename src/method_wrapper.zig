@@ -60,12 +60,12 @@ pub fn MethodWrapper(comptime T: type) type {
         // --------------------------------------------------------------------------
         // Methods
         // --------------------------------------------------------------------------
-        pub fn __bool__(self: *Self) ?*Object {
-            return py.notNull(self.resolve());
+        pub fn __bool__(self: *Self) c_int {
+            return @intFromBool(self.resolve());
         }
 
-        pub fn __hash__(self: *Self) ?*Object {
-            return @ptrCast(Int.newUnchecked(self.hash));
+        pub fn __hash__(self: *Self) isize {
+            return self.hash;
         }
 
         pub fn richcompare(self: *Self, other: *T, op: c_int) ?*Object {

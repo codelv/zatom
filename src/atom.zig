@@ -74,7 +74,7 @@ pub const AtomBase = extern struct {
     }
 
     // Get a pointer to slot address at the given index
-    pub fn slotPtr(self: *Self, i: u32) ?*?*Object {
+    pub inline fn slotPtr(self: *Self, i: u32) ?*?*Object {
         if (i < self.info.slot_count) {
             // This intentionally disables safety checking because it
             // intentionally writes into the inlined slots in the Atom(n) subclass
@@ -86,7 +86,7 @@ pub const AtomBase = extern struct {
     }
 
     // Get a pointer to the ObserverPool from the manager on the type.
-    pub fn dynamicObserverPool(self: Self) ?*ObserverPool {
+    pub inline fn dynamicObserverPool(self: Self) ?*ObserverPool {
         if (self.info.has_observers) {
             const meta: *AtomMeta = @ptrCast(self.typeref());
             return meta.pool_manager.?.get(self.info.pool_index);
@@ -95,7 +95,7 @@ pub const AtomBase = extern struct {
     }
 
     // Get a pointer to the static observer pool
-    pub fn staticObserverPool(self: Self) ?*ObserverPool {
+    pub inline fn staticObserverPool(self: Self) ?*ObserverPool {
         const meta: *AtomMeta = @ptrCast(self.typeref());
         return meta.static_observers;
     }
@@ -165,12 +165,12 @@ pub const AtomBase = extern struct {
         }
     }
 
-    pub fn notifyInternal(self: *Self, topic: *Str, args: *Tuple, kwargs: ?*Dict, change_types: u8) !void {
+    pub fn notifyInternal(self: *Self, topic: *Str, args: anytype, change_types: u8) !void {
         if (self.staticObserverPool()) |pool| {
-            try pool.notify(py.allocator, topic, args, kwargs, change_types);
+            try pool.notify(py.allocator, topic, args, change_types);
         }
         if (self.dynamicObserverPool()) |pool| {
-            try pool.notify(py.allocator, topic, args, kwargs, change_types);
+            try pool.notify(py.allocator, topic, args, change_types);
         }
     }
 
@@ -249,14 +249,16 @@ pub const AtomBase = extern struct {
         return py.typeErrorObject(null, "Invalid arguments. Signature is unobserve(topic: Optional[str]=None, observer: Optional[Callable]=None)", .{});
     }
 
-    pub fn notify(self: *Self, args: *Tuple, kwargs: ?*Dict) ?*Object {
-        const n = args.size() catch return null;
-        if (n < 1 or !Str.check(args.getUnsafe(0).?)) {
-            return py.typeErrorObject(null, "Invalid arguments. Signature is notify(topic: str, *args, **kwargs)", .{});
+    pub fn notify(self: *Self, args: [*]*Object, n: isize) ?*Object {
+        if (n < 1 or n > 2 or !Str.check(args[0])) {
+            return py.typeErrorObject(null, "Invalid arguments. Signature is notify(topic: str, change = None)", .{});
         }
-        const topic: *Str = @ptrCast(args.getUnsafe(0).?);
-        const new_args = args.slice(1, n) catch return null;
-        self.notifyInternal(topic, new_args, kwargs, @intFromEnum(ChangeType.any)) catch return null;
+        const topic: *Str = @ptrCast(args[0]);
+        if (n == 2) {
+            self.notifyInternal(topic, .{args[1]}, @intFromEnum(ChangeType.any)) catch return null;
+        } else {
+            self.notifyInternal(topic, .{}, @intFromEnum(ChangeType.any)) catch return null;
+        }
         return py.returnNone();
     }
 
@@ -360,7 +362,7 @@ pub const AtomBase = extern struct {
         .{ .ml_name = "unobserve", .ml_meth = @constCast(@ptrCast(&unobserve)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Unregister an observer callback for the given topic(s)." },
         .{ .ml_name = "has_observers", .ml_meth = @constCast(@ptrCast(&has_observers)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Get whether the atom has observers for a given topic." },
         .{ .ml_name = "has_observer", .ml_meth = @constCast(@ptrCast(&has_observer)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Get whether the atom has the given observer for a given topic." },
-        .{ .ml_name = "notify", .ml_meth = @constCast(@ptrCast(&notify)), .ml_flags = py.c.METH_VARARGS | py.c.METH_KEYWORDS, .ml_doc = "Call the registered observers for a given topic with positional and keyword arguments." },
+        .{ .ml_name = "notify", .ml_meth = @constCast(@ptrCast(&notify)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Call the registered observers for a given topic with positional and keyword arguments." },
         .{ .ml_name = "__sizeof__", .ml_meth = @constCast(@ptrCast(&sizeof)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Get size of object in memory in bytes" },
         .{}, // sentinel
     };

@@ -142,6 +142,22 @@ def test_validate_set_int(benchmark, atom):
 
     benchmark.pedantic(update, rounds=100, iterations=10)
 
+@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.benchmark(group="validate-tuple")
+def test_validate_tuple_str(benchmark, atom):
+    class Obj(atom.Atom):
+        items = atom.Tuple(atom.Str())
+
+    obj = Obj()
+    value = tuple(f"{i}" for i in range(100))
+    with pytest.raises(TypeError):
+        obj.items = (1, 2)  # Make sure its actually working
+
+    def update():
+        obj.items = value
+        del obj.items
+
+    benchmark.pedantic(update, rounds=100, iterations=10)
 
 @pytest.mark.parametrize("atom", (catom, zatom))
 @pytest.mark.benchmark(group="validate-list")
@@ -150,7 +166,7 @@ def test_validate_list_int(benchmark, atom):
         items = atom.List(atom.Int())
 
     obj = Obj()
-    value = [i for i in range(1000)]
+    value = [i for i in range(100)]
     with pytest.raises(TypeError):
         obj.items = ["1"]  # Make sure its actually working
 
@@ -159,3 +175,128 @@ def test_validate_list_int(benchmark, atom):
         del obj.items
 
     benchmark.pedantic(update, rounds=100, iterations=10)
+
+
+
+@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.benchmark(group="list-append")
+def test_typed_list_append_int(benchmark, atom):
+    if atom == "slots":
+        class Obj:
+            __slots__ = ("items",)
+    else:
+        class Obj(atom.Atom):
+            items = atom.List(atom.Int())
+
+    obj = Obj()
+    obj.items = [0]
+    if atom != "slots":
+        with pytest.raises(TypeError):
+            obj.items.append("1") # Make sure its actually working
+
+    i = 0;
+    def update():
+        nonlocal i
+        i += 1
+        obj.items.append(i)
+
+    benchmark.pedantic(update, rounds=1000, iterations=10)
+
+
+@pytest.mark.parametrize("atom", (catom, zatom, "slots"))
+@pytest.mark.benchmark(group="list-extend")
+def test_typed_list_extend_int(benchmark, atom):
+    if atom == "slots":
+        class Obj:
+            __slots__ = ("items",)
+
+    else:
+        class Obj(atom.Atom):
+            items = atom.List(atom.Int())
+
+    obj = Obj()
+    obj.items = [0]
+
+    if atom != "slots":
+        with pytest.raises(TypeError):
+            obj.items.extend(["1"]) # Make sure its actually working
+
+    def update():
+        obj.items.extend([1, 2, 3])
+
+    benchmark.pedantic(update, rounds=100, iterations=10)
+
+
+@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.benchmark(group="observer-decorated-notify")
+def test_observer_decorated_notify(benchmark, atom):
+    class Obj(atom.Atom):
+        x = atom.Int()
+
+        @atom.observe('x')
+        def on_change(self, change):
+            pass
+
+    obj = Obj()
+
+    def update():
+        obj.x += 1
+
+    benchmark.pedantic(update, rounds=1000, iterations=10)
+
+@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.benchmark(group="observer-extended-notify")
+def test_observer_decorated_notify(benchmark, atom):
+    class Point(atom.Atom):
+        x = atom.Int()
+
+    class Obj(atom.Atom):
+        pos = atom.Typed(Point, ())
+
+        @atom.observe('pos.x')
+        def on_change(self, change):
+            pass
+
+    obj = Obj()
+
+    def update():
+        obj.pos.x += 1
+        if obj.pos.x == 100:
+            obj.pos = Point()
+
+    benchmark.pedantic(update, rounds=1000, iterations=10)
+
+@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.benchmark(group="observer-static-notify")
+def test_observer_static_notify(benchmark, atom):
+    class Obj(atom.Atom):
+        x = atom.Int()
+
+    def observer(change):
+        pass
+    Obj.x.add_static_observer(observer)
+
+    obj = Obj()
+
+    def update():
+        obj.x += 1
+
+    benchmark.pedantic(update, rounds=1000, iterations=10)
+
+
+@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.benchmark(group="observer-dynamic-notify")
+def test_observer_dynamic_notify(benchmark, atom):
+    class Obj(atom.Atom):
+        x = atom.Int()
+
+    def observer(change):
+        pass
+
+    obj = Obj()
+    obj.observe("x", observer)
+
+    def update():
+        obj.x += 1
+
+    benchmark.pedantic(update, rounds=1000, iterations=10)

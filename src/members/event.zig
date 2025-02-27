@@ -54,7 +54,7 @@ pub const EventBinder = extern struct {
             py.typeError("An event can be triggered with at most 1 argument", .{}) catch return null;
         }
         const value = if (n == 0) py.None() else args.getUnsafe(0).?;
-        EventMember.Impl.setattr(@ptrCast(self.member), self.atom, value) catch return null;
+        self.member.setattr(self.atom, value) catch return null;
         return py.returnNone();
     }
 

@@ -1,4 +1,4 @@
-from zatom.api import Atom, Int
+from zatom.api import Atom, Int, Typed, observe
 
 
 def test_dynamic_observe():
@@ -47,6 +47,53 @@ def test_dynamic_observe():
 
     a.x = 3
     assert len(changes) == 3
+
+
+
+def test_observe_decorator():
+    changes = []
+
+    class A(Atom):
+        x = Int()
+
+        @observe('x')
+        def on_change(self, change):
+            changes.append(change)
+
+    assert A.x.has_observers()
+    a = A()
+    a.x
+    assert len(changes) == 1
+    assert changes[-1] == {"type": "create", "name": "x", "object": a, "value": 0}
+
+    a.x = 1
+    assert len(changes) == 2
+    assert changes[-1] == {"type": "update", "name": "x", "object": a, "oldvalue": 0, "value": 1}
+
+    del a.x
+    assert len(changes) == 3
+    assert changes[-1] == {"type": "delete", "name": "x", "object": a, "value": 1}
+
+
+def test_observe_extended_decorator():
+    changes = []
+
+    class Pt(Atom):
+        x = Int()
+
+    class A(Atom):
+        pos = Typed(Pt, ())
+
+        @observe('pos.x')
+        def on_change(self, change):
+            changes.append(change)
+
+    assert A.pos.has_observers()
+    a = A()
+    a.pos.x
+    assert a.pos.has_observers('x')
+    assert len(changes) == 1
+    assert changes[-1] == {"type": "create", "name": "x", "object": a.pos, "value": 0}
 
 
 def test_static_observe():

@@ -54,26 +54,6 @@ pub const MemberInfo = packed struct {
     padding: u25 = 0,
 };
 
-pub const Validator = *const fn (*MemberBase, *AtomBase, *Object, *Object) py.Error!*Object;
-
-fn initValidators() [32]?Validator {
-    comptime {
-        var validators: [32]?Validator = [_]?Validator{null} ** 32;
-        validators[0] = &MemberBase.validateGeneric;
-        for (all_modules) |mod| {
-            if (@hasDecl(mod, "all_members")) {
-                for (mod.all_members) |m| {
-                    validators[m.typeid] = &m.validateGeneric;
-                }
-            }
-        }
-        return validators;
-    }
-}
-
-pub var all_validators: [32]?Validator = initValidators();
-
-
 // Base Member class
 pub const MemberBase = extern struct {
     // Reference to the type. This is set in ready
@@ -353,17 +333,16 @@ pub const MemberBase = extern struct {
         return self.cloneInternal() catch return null;
     }
 
-    pub fn notify(self: *Self, args: *Tuple, kwargs: ?*Dict) ?*Object {
-        const n = args.size() catch return null;
-        if (n < 1) {
-            return py.typeErrorObject(null, "notify() requires at least 1 argument", .{});
+    pub fn notify(self: *Self, args: [*]*Object, n: isize) ?*Object {
+        if (n < 1 or n > 2 or !AtomBase.check(args[0])) {
+            return py.typeErrorObject(null, "Invalid arguments: Signature is notify(atom: Atom, change = None)", .{});
         }
-        const atom: *AtomBase = @ptrCast(args.getUnsafe(0).?);
-        if (!atom.typeCheckSelf()) {
-            return py.typeErrorObject(null, "notify() 1st argument must be an Atom instance", .{});
+        const atom: *AtomBase = @ptrCast(args[0]);
+        if (n == 2) {
+            atom.notifyInternal(self.name, .{args[1]}, @intFromEnum(ChangeType.any)) catch return null;
+        } else {
+            atom.notifyInternal(self.name, .{}, @intFromEnum(ChangeType.any)) catch return null;
         }
-        const new_args = args.slice(1, n) catch return null;
-        atom.notifyInternal(self.name, new_args, kwargs, @intFromEnum(ChangeType.any)) catch return null;
         return py.returnNone();
     }
 
@@ -395,14 +374,9 @@ pub const MemberBase = extern struct {
     // --------------------------------------------------------------------------
     // Internal api
     // --------------------------------------------------------------------------
-    pub fn validateGeneric(_: *Self, _: *AtomBase, _: *Object, newvalue: *Object) py.Error!*Object {
-        return newvalue.newref();
-    }
-
     pub inline fn validate(self: *Self, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
-//         if (all_validators[self.info.typeid]) |validator| {
-//             return validator(self, atom, oldvalue, newvalue);
-//         }
+        // Zig is able to inline validation of everything except the custom
+        // containers that require coercion.
         @setEvalBranchQuota(10000);
         inline for (all_modules) |mod| {
             if (comptime @hasDecl(mod, "all_members")) {
@@ -508,9 +482,7 @@ pub const MemberBase = extern struct {
     }
 
     pub fn notifyChange(self: *Self, atom: *AtomBase, change: *Dict, change_type: ChangeType) !void {
-        const args = try Tuple.packNewrefs(.{change});
-        defer args.decref();
-        try atom.notifyInternal(self.name, args, null, @intFromEnum(change_type));
+        try atom.notifyInternal(self.name, .{change}, @intFromEnum(change_type));
     }
 
     pub fn notifyCreate(self: *Self, atom: *AtomBase, newvalue: *Object) !void {
@@ -662,7 +634,7 @@ pub const MemberBase = extern struct {
         .{ .ml_name = "get_slot", .ml_meth = @constCast(@ptrCast(&get_slot)), .ml_flags = py.c.METH_O, .ml_doc = "Get slot value directly" },
         .{ .ml_name = "set_slot", .ml_meth = @constCast(@ptrCast(&set_slot)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Set slot value directly" },
         .{ .ml_name = "del_slot", .ml_meth = @constCast(@ptrCast(&del_slot)), .ml_flags = py.c.METH_O, .ml_doc = "Del slot value directly" },
-        .{ .ml_name = "notify", .ml_meth = @constCast(@ptrCast(&notify)), .ml_flags = py.c.METH_VARARGS | py.c.METH_KEYWORDS, .ml_doc = "Notify the observers for the given member and atom." },
+        .{ .ml_name = "notify", .ml_meth = @constCast(@ptrCast(&notify)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Notify the observers for the given member and atom." },
         .{ .ml_name = "has_observers", .ml_meth = @constCast(@ptrCast(&has_observers)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Get whether or not this member has observers." },
         .{ .ml_name = "has_observer", .ml_meth = @constCast(@ptrCast(&has_observer)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Get whether or not the member already has the given observer." },
         .{ .ml_name = "add_static_observer", .ml_meth = @constCast(@ptrCast(&add_static_observer)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Add the name of a method to call on all atoms when the member changes." },
@@ -814,7 +786,10 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
 
         // Default getattr implementation provides normal slot behavior
         // Returns new reference
-        pub fn getattr(self: *Self, atom: *AtomBase) py.Error!*Object {
+        pub inline fn getattr(self: *Self, atom: *AtomBase) py.Error!*Object {
+            if (comptime @hasDecl(impl, "getattr")) {
+                return impl.getattr(@ptrCast(self), atom);
+            }
             if (atom.slotPtr(self.base.info.index)) |ptr| {
                 if (try readSlot(@ptrCast(self), atom, ptr)) |v| {
                     if (comptime storage_mode == .pointer) {
@@ -843,7 +818,10 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         }
 
         // Default setattr implementation provides normal slot behavior
-        pub fn setattr(self: *Self, atom: *AtomBase, newvalue: *Object) py.Error!void {
+        pub inline fn setattr(self: *Self, atom: *AtomBase, newvalue: *Object) py.Error!void {
+            if (comptime @hasDecl(impl, "setattr")) {
+                return impl.setattr(@ptrCast(self), atom, newvalue);
+            }
             if (atom.slotPtr(self.base.info.index)) |ptr| {
                 if (atom.info.is_frozen) {
                     // @branchHint(.unlikely);
@@ -879,7 +857,10 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         }
 
         // Default delattr implementation
-        pub fn delattr(self: *Self, atom: *AtomBase) py.Error!void {
+        pub inline fn delattr(self: *Self, atom: *AtomBase) py.Error!void {
+            if (comptime @hasDecl(impl, "delattr")) {
+                return impl.delattr(@ptrCast(self), atom);
+            }
             if (atom.info.is_frozen) {
                 // @branchHint(.unlikely);
                 return py.attributeError("Can't delete attribute of frozen Atom", .{});
@@ -971,8 +952,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 if (!atom.typeCheckSelf()) {
                     return py.typeErrorObject(null, "Members can only be used on Atom objects", .{});
                 }
-                const handler = comptime if (@hasDecl(impl, "getattr")) impl.getattr else Self.getattr;
-                return handler(@ptrCast(self), atom) catch null;
+                return self.getattr(atom) catch null;
             }
             return @ptrCast(self.newref());
         }
@@ -982,11 +962,9 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 py.typeError("Members can only be used on Atom objects", .{}) catch return -1;
             }
             if (value) |v| {
-                const handler = comptime if (@hasDecl(impl, "setattr")) impl.setattr else Self.setattr;
-                handler(@ptrCast(self), atom, v) catch return -1;
+                self.setattr(atom, v) catch return -1;
             } else {
-                const handler = comptime if (@hasDecl(impl, "delattr")) impl.delattr else Self.delattr;
-                handler(@ptrCast(self), atom) catch return -1;
+                self.delattr(atom) catch return -1;
             }
             return 0;
         }
