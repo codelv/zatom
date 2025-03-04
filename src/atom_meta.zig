@@ -8,6 +8,7 @@ const Int = py.Int;
 const Dict = py.Dict;
 const List = py.List;
 const Tuple = py.Tuple;
+const Function = py.Function;
 
 const atom = @import("atom.zig");
 const Atom = atom.Atom;
@@ -26,45 +27,53 @@ var slots_str: ?*Str = null;
 var weakref_str: ?*Str = null;
 const package_name = @import("api.zig").package_name;
 
+
 pub fn computeMemoryLayout(
     member: *MemberBase,
-    slot_count: *usize,
-    slot_offset: *usize,
-    last_static_slot: *?usize
+    info: *MetaInfo,
 ) void {
     const max_bits: usize = @bitSizeOf(usize);
     switch (member.info.storage_mode) {
         .pointer => {
-            member.info.index = @intCast(slot_count.*);
-            slot_count.* += 1;
+            member.info.index = @intCast(info.slot_count);
+            info.slot_count += 1;
         },
         .static => {
             // Check if there is room in the last spot;
-            const space_remaining = max_bits -| slot_offset.*;
+            const space_remaining = max_bits -| info.slot_offset;
             // The reason we add 2 is because we have to reservere 1
             // extra bit to account for a "null" in order to
             // preserve the `default` behavior
             const bitsize = @as(usize, member.info.width) + 2;
             const can_fit = bitsize < space_remaining;
 
-            if (last_static_slot.* == null or !can_fit) {
+            if (!info.has_static_slot or !can_fit) {
                 // Start a new static slot
-                member.info.index = @intCast(slot_count.*);
-                last_static_slot.* = slot_count.*;
+                member.info.index = @intCast(info.slot_count);
+                info.last_static_slot = info.slot_count;
+                info.has_static_slot = true;
                 member.info.offset = 0;
-                slot_offset.* = bitsize; // Reset slot offset
-                slot_count.* += 1; // This consumes a slot
+                info.slot_offset = @truncate(bitsize); // Reset slot offset
+                info.slot_count += 1; // This consumes a slot
             } else {
                 // Reuse the space from the last static slot
-                member.info.index = @intCast(last_static_slot.*.?);
-                member.info.offset = @intCast(slot_offset.*);
-                slot_offset.* += bitsize;
+                member.info.index = @intCast(info.last_static_slot);
+                member.info.offset = @intCast(info.slot_offset);
+                info.slot_offset += @truncate(bitsize);
             }
         },
         .none => {}, // No-op
     }
 
 }
+
+pub const MetaInfo = packed struct {
+    slot_count: u16 = 0,
+    has_static_slot: bool = false,
+    last_static_slot: u16 = 0,
+    slot_offset: u5 = 0,
+    reserved: u26 = 0,
+};
 
 // A metaclass
 pub const AtomMeta = extern struct {
@@ -77,7 +86,7 @@ pub const AtomMeta = extern struct {
     atom_members: ?*AtomMembers = null,
     pool_manager: ?*PoolManager = null,
     static_observers: ?*ObserverPool = null,
-    slot_count: u16 = 0,
+    info: MetaInfo,
 
     // Import the object protocol
     pub usingnamespace py.ObjectProtocol(@This());
@@ -135,7 +144,6 @@ pub const AtomMeta = extern struct {
         const members = try Dict.new();
         defer members.decref();
 
-        // Track the largest base
         var found_atom: bool = false;
         for (0..num_bases) |i| {
             const base = bases.getUnsafe(i).?;
@@ -156,26 +164,43 @@ pub const AtomMeta = extern struct {
         }
 
         // Gather members from the class
-        var slot_count: usize = 0;
+        var info = MetaInfo{};
         {
             var pos: isize = 0;
-            var last_static_slot: ?usize = null;
-            var slot_offset: usize = 0;
             while (dict.next(&pos)) |entry| {
-                if (MemberBase.check(entry.value) and Str.check(entry.key)) {
+                if (!Str.check(entry.key)) {
+                    continue;
+                }
+                const attr: *Str = @ptrCast(entry.key);
+
+                if (MemberBase.check(entry.value)) {
                     const member: *MemberBase = @ptrCast(entry.value);
-                    py.xsetref(@ptrCast(&member.name), @ptrCast(entry.key.newref()));
-                    computeMemoryLayout(member, &slot_count, &slot_offset, &last_static_slot);
-                    try members.set(entry.key, @ptrCast(member));
-                } else if (ObserveHandler.check(entry.value) and Str.check(entry.key)) {
+                    member.setName(attr);
+                    computeMemoryLayout(member, &info);
+                    try members.set(@ptrCast(attr), @ptrCast(member));
+
+
+                    const member_default_str = try Str.format("_default_{s}", .{attr.data()});
+                    defer member_default_str.decref();
+                    if (dict.get(@ptrCast(member_default_str))) |func| {
+                        if (Function.check(func)) {
+                            member.info.default_mode = .method;
+                            py.xsetref(&member.default_context, func.newref());
+                        }
+                        // TODO: else should this throw an error
+                    }
+
+                } else if (ObserveHandler.check(entry.value)) {
                     const observer: *ObserveHandler = @ptrCast(entry.value);
                     if (observer.func) |func| {
                         try observers.append(@ptrCast(observer));
                         // Replace the observe handler with the original function
                         // It's safe to modify the value of dict while iterating
-                        try dict.set(entry.key, @ptrCast(func));
+                        try dict.set(@ptrCast(attr), @ptrCast(func));
                     }
                 }
+
+                // TODO: Look for un
             }
             // TODO: Unfortunately this adds them to the end
             for (inherited_members.items) |member| {
@@ -184,7 +209,7 @@ pub const AtomMeta = extern struct {
                 }
                 const new_member: *MemberBase = @ptrCast(try member.cloneOrError());
                 defer new_member.decref();
-                computeMemoryLayout(new_member, &slot_count, &slot_offset, &last_static_slot);
+                computeMemoryLayout(new_member, &info);
                 try dict.set(@ptrCast(new_member.name.?), @ptrCast(new_member));
                 try members.set(@ptrCast(new_member.name.?), @ptrCast(new_member));
             }
@@ -203,11 +228,8 @@ pub const AtomMeta = extern struct {
             return error.PyError;
         }
         // Modify the basicsize so instances allocate the correct size
-        if (slot_count > 1) {
-            const extra_slots = slot_count - 1;
-            cls.base.impl.ht_type.tp_basicsize = @intCast(@sizeOf(Atom) + extra_slots * @sizeOf(*Object));
-        }
-        cls.slot_count = @intCast(slot_count);
+        cls.info = info;
+        cls.updateTypeSize();
         cls.pool_manager = try PoolManager.new(py.allocator);
         try cls.initStaticObservers(observers, members);
 
@@ -253,7 +275,7 @@ pub const AtomMeta = extern struct {
         while (members.next(&pos)) |entry| {
             // Assign the owner and copy into our array
             const member: *MemberBase = @ptrCast(entry.value);
-            py.xsetref(&member.owner, @ptrCast(self.newref()));
+            member.setOwner(@ptrCast(self));
             members_array.appendAssumeCapacity(member.newref());
         }
         return 0;
@@ -271,12 +293,67 @@ pub const AtomMeta = extern struct {
     }
 
     pub fn get_slot_count(self: *Self) ?*Int {
-        return Int.new(self.slot_count) catch return null;
+        return Int.new(self.info.slot_count) catch return null;
+    }
+
+    pub fn add_member(self: *Self, args: [*]*Object, n: isize) ?*Object {
+        if (n != 2 or !Str.check(args[0]) or !MemberBase.check(args[1])) {
+            return py.typeErrorObject(null, "Invalid arguments: Signature is add_member(cls: AtomMeta, name: str, member: Member)", .{});
+        }
+        const name: *Str = @ptrCast(args[0]);
+        // TODO: Check if string is interned
+        const member: *MemberBase = @ptrCast(args[1]);
+        if (member.owner != null) {
+            // TODO: Support owned and copy static observers
+            return py.typeErrorObject(null, "Cannot add a member owned by other Atom class", .{});
+        }
+        self.setAttr(name, @ptrCast(member)) catch return null;
+
+        if (self.atom_members) |members| {
+            var pos: ?u16 = null;
+            for (members.items, 0..) |existing, i| {
+                // Since names are interned they can be compared with pointers
+                if (existing.name == name) {
+                    pos = @intCast(i);
+                    if (!existing.hasSameMemoryLayout(member)) {
+                        return py.typeErrorObject(null, "Replacing a member with a different layout is yet not supported", .{});
+                    }
+                    break;
+                }
+            }
+            if (pos) |i| {
+                // Discard old
+                py.setref(@ptrCast(&members.items[i]), @ptrCast(member.newref()));
+            } else {
+                members.append(py.allocator, member.newref()) catch {
+                    return py.memoryErrorObject(null);
+                };
+            }
+            member.setName(name);
+            member.setOwner(@ptrCast(self));
+            const old_slot_count = self.info.slot_count;
+            computeMemoryLayout(member, &self.info);
+            if (self.info.slot_count > old_slot_count) {
+                self.updateTypeSize();
+            }
+        } else {
+            return py.typeErrorObject(null, "TODO: Add member to empty atom", .{});
+        }
+        return py.returnNone();
     }
 
     // --------------------------------------------------------------------------
     // Internal api
     // --------------------------------------------------------------------------
+    pub fn updateTypeSize(self: *Self) void {
+        if (self.info.slot_count > 1) {
+            const extra_slots = self.info.slot_count - 1;
+            self.base.impl.ht_type.tp_basicsize = @intCast(@sizeOf(Atom) + extra_slots * @sizeOf(*Object));
+        } else {
+            self.base.impl.ht_type.tp_basicsize = @intCast(@sizeOf(Atom));
+        }
+    }
+
     pub fn initStaticObservers(self: *Self, observers: *List, members: *Dict) !void {
         var pos: usize = 0;
         while (observers.next(&pos)) |item| {
@@ -438,6 +515,7 @@ pub const AtomMeta = extern struct {
     const methods = [_]py.MethodDef{
         .{ .ml_name = "get_member", .ml_meth = @constCast(@ptrCast(&get_member)), .ml_flags = py.c.METH_O, .ml_doc = "Get the atom member with the given name" },
         .{ .ml_name = "members", .ml_meth = @constCast(@ptrCast(&get_atom_members)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Get atom members" },
+        .{ .ml_name = "add_member", .ml_meth = @constCast(@ptrCast(&add_member)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Add an atom member" },
         .{}, // sentinel
     };
 
@@ -446,7 +524,7 @@ pub const AtomMeta = extern struct {
         .{ .slot = py.c.Py_tp_dealloc, .pfunc = @constCast(@ptrCast(&dealloc)) },
         .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
         .{ .slot = py.c.Py_tp_clear, .pfunc = @constCast(@ptrCast(&clear)) },
-        // .{ .slot = py.c.Py_tp_methods, .pfunc = @constCast(@ptrCast(&methods)) },
+        .{ .slot = py.c.Py_tp_methods, .pfunc = @constCast(@ptrCast(&methods)) },
         //.{ .slot = py.c.Py_tp_members, .pfunc = @constCast(@ptrCast(&tp_members)) },
         .{ .slot = py.c.Py_tp_getset, .pfunc = @constCast(@ptrCast(&getset)) },
         .{}, // sentinel

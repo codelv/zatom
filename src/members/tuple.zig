@@ -31,7 +31,7 @@ pub const TupleMember = Member("Tuple", 15, struct {
             if (!default_factory.?.isCallable()) {
                 return py.typeError("factory must be a callable that returns the default value", .{});
             }
-            self.info.default_mode = .call;
+            self.info.default_mode = .func;
             self.default_context = default_factory.?.newref();
         } else if (py.notNone(default_value)) {
             if (!Tuple.check(default_value.?)) {

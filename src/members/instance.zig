@@ -40,10 +40,10 @@ pub const InstanceMember = Member("Instance", 4, struct {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
-            self.info.default_mode = .call;
+            self.info.default_mode = .func;
             self.default_context = factory.?.newref();
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
-            self.info.default_mode = .call;
+            self.info.default_mode = .func;
             const cls = if (Tuple.check(kind)) try Tuple.get(@ptrCast(kind), 0) else kind;
 
             const partial_kwargs: ?*Dict = blk: {
@@ -145,10 +145,10 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
-            self.info.default_mode = .call;
+            self.info.default_mode = .func;
             self.default_context = factory.?.newref();
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
-            self.info.default_mode = .call;
+            self.info.default_mode = .func;
 
             const partial_kwargs: *Object = blk: {
                 if (init_kwargs) |v| {

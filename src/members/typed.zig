@@ -43,10 +43,10 @@ pub const TypedMember = Member("Typed", 16, struct {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
-            self.info.default_mode = .call;
+            self.info.default_mode = .func;
             self.default_context = factory.?.newref();
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
-            self.info.default_mode = .call;
+            self.info.default_mode = .func;
 
             const partial_kwargs: ?*Dict = blk: {
                 if (init_kwargs) |v| {
@@ -140,10 +140,10 @@ pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
-            self.info.default_mode = .call;
+            self.info.default_mode = .func;
             self.default_context = factory.?.newref();
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
-            self.info.default_mode = .call;
+            self.info.default_mode = .func;
 
             const partial_kwargs: *Object = blk: {
                 if (init_kwargs) |v| {

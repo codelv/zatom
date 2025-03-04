@@ -38,7 +38,7 @@ pub const StorageMode = enum(u2) {
 };
 
 pub const Ownership = enum(u1) { stolen = 0, borrowed = 1 };
-pub const DefaultMode = enum(u1) { static = 0, call = 1 };
+pub const DefaultMode = enum(u2) { static = 0, func = 1, method = 2 };
 pub const Observable = enum(u2) { no = 0, yes = 1, maybe = 2 };
 
 pub const MemberInfo = packed struct {
@@ -52,7 +52,7 @@ pub const MemberInfo = packed struct {
     coerce: bool = false,
     resolved: bool = false,
     typeid: u5 = 0,
-    padding: u25 = 0,
+    padding: u24 = 0,
 };
 
 // Base Member class
@@ -97,8 +97,7 @@ pub const MemberBase = extern struct {
         if (!Str.checkExact(value)) {
             return py.typeErrorObject(-1, "Member name must be a str", .{});
         }
-        py.xsetref(@ptrCast(&self.name), value.newref());
-        Str.internInPlace(@ptrCast(&self.name.?));
+        self.setName(@ptrCast(value));
         return 0;
     }
 
@@ -375,6 +374,19 @@ pub const MemberBase = extern struct {
     // --------------------------------------------------------------------------
     // Internal api
     // --------------------------------------------------------------------------
+    pub fn setName(self: *Self, name: *Str) void {
+        py.xsetref(@ptrCast(&self.name), @ptrCast(name.newref()));
+        Str.internInPlace(@ptrCast(&self.name.?));
+    }
+    pub fn setOwner(self: *Self, owner: ?*Object) void {
+        if (owner) |o| {
+            py.xsetref(&self.owner, o.newref());
+        } else {
+            py.clear(&self.owner);
+        }
+
+    }
+
     pub inline fn validate(self: *Self, atom: *Atom, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
         // Zig is able to inline validation of everything except the custom
         // containers that require coercion.
@@ -578,6 +590,13 @@ pub const MemberBase = extern struct {
         return @as(usize, @as(usize, 1) << pos);
     }
 
+    pub fn hasSameMemoryLayout(self: *Self, other: *Self) bool {
+        return (
+            self.info.storage_mode == other.info.storage_mode
+            and self.info.width == other.info.width
+        );
+    }
+
     // Generic implementation to generate the default value
     // The impl can override per mode as needed.
     // Returns new reference
@@ -592,12 +611,22 @@ pub const MemberBase = extern struct {
                 }
                 return py.returnNone();
             },
-            .call => {
-                if (comptime @hasDecl(impl, "defaultCall")) {
-                    return impl.defaultCall(self, atom);
+            .func => {
+                if (comptime @hasDecl(impl, "defaultFunc")) {
+                    return impl.defaultFunc(self, atom);
                 }
                 if (self.default_context) |callable| {
                     return callable.callArgs(.{});
+                }
+                try py.systemError("default context missing", .{});
+                unreachable;
+            },
+            .method => {
+                if (comptime @hasDecl(impl, "defaultMethod")) {
+                    return impl.defaultMethod(self, atom);
+                }
+                if (self.default_context) |callable| {
+                    return callable.callArgs(.{atom});
                 }
                 try py.systemError("default context missing", .{});
                 unreachable;
@@ -961,7 +990,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                     if (!default_factory.?.isCallable()) {
                         return py.typeErrorObject(-1, "factory must be a callable that returns the default value", .{});
                     }
-                    self.base.info.default_mode = .call;
+                    self.base.info.default_mode = .func;
                     self.base.default_context = default_factory.?.newref();
                 } else if (py.notNone(default_context)) {
                     self.base.default_context = default_context.?.newref();

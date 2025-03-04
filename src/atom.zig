@@ -53,7 +53,7 @@ pub const Atom = extern struct {
         }
         const self: *Self = @ptrCast(cls.genericNew(args, kwargs) catch return null);
         const meta: *AtomMeta = @ptrCast(cls);
-        self.info.slot_count = meta.slot_count;
+        self.info.slot_count = meta.info.slot_count;
         return self;
     }
 

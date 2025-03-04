@@ -3,6 +3,7 @@ const c = py.c;
 const Object = py.Object;
 const Module = py.Module;
 const Tuple = py.Tuple;
+const Dict = py.Dict;
 const std = @import("std");
 
 const member = @import("member.zig");
@@ -29,7 +30,20 @@ pub export fn atom_modexec(mod: *py.Module) c_int {
     };
 }
 
+pub fn add_member(_: *Module, args: [*]*Object, n: isize) ?*Object {
+    if (n != 3 or !atom_meta.AtomMeta.check(args[0]))  {
+        return py.typeErrorObject(null, "Expected AtomMeta class", .{});
+    }
+    return atom_meta.AtomMeta.add_member(@ptrCast(args[0]),args[1..3], 2);
+}
+
+pub fn observe(_: *Module, args: *Tuple, kwargs: ?*Dict) ?*Object {
+    return observation.ObserveHandler.TypeObject.?.call(args, kwargs) catch return null;
+}
+
 var module_methods = [_]py.MethodDef{
+    .{ .ml_name = "add_member", .ml_meth = @constCast(@ptrCast(&add_member)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Add an atom member to a class" },
+    .{ .ml_name = "observe", .ml_meth = @constCast(@ptrCast(&observe)), .ml_flags = py.c.METH_VARARGS|py.c.METH_KEYWORDS, .ml_doc = "Add a static observer on a method" },
     .{}, // sentinel
 };
 
