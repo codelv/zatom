@@ -5,7 +5,7 @@ const Tuple = py.Tuple;
 const Dict = py.Dict;
 const Type = py.Type;
 const Str = py.Str;
-const AtomBase = @import("../atom.zig").AtomBase;
+const Atom = @import("../atom.zig").Atom;
 const AtomMeta = @import("../atom_meta.zig").AtomMeta;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
@@ -97,7 +97,7 @@ pub const TypedMember = Member("Typed", 16, struct {
         return .no;
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
+    pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
         if (new.isNone() and self.info.optional) {
             return new.newref(); // Ok
         }
@@ -181,7 +181,7 @@ pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
         }
     }
 
-    pub fn resolve(self: *MemberBase, atom: *AtomBase) !void {
+    pub fn resolve(self: *MemberBase, atom: *Atom) !void {
         if (self.validate_context == null) {
             return py.systemError("Invalid resolve context", .{});
         }
@@ -213,14 +213,14 @@ pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
         self.info.resolved = true;
     }
 
-    pub fn default(self: *MemberBase, atom: *AtomBase) !*Object {
+    pub fn default(self: *MemberBase, atom: *Atom) !*Object {
         if (!self.info.resolved) {
             try resolve(self, atom);
         }
         return MemberBase.default(self, @This(), atom);
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
+    pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
         if (new.isNone() and self.info.optional) {
             return new.newref(); // Ok
         }

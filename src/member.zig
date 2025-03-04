@@ -21,7 +21,7 @@ pub var value_str: ?*Str = null;
 pub var oldvalue_str: ?*Str = null;
 pub var item_str: ?*Str = null;
 
-const AtomBase = @import("atom.zig").AtomBase;
+const Atom = @import("atom.zig").Atom;
 const AtomMeta = @import("atom_meta.zig").AtomMeta;
 const ObserverPool = @import("observer_pool.zig").ObserverPool;
 const ChangeType = @import("observer_pool.zig").ChangeType;
@@ -186,7 +186,7 @@ pub const MemberBase = extern struct {
     // --------------------------------------------------------------------------
     // Methods
     // --------------------------------------------------------------------------
-    pub fn get_slot(self: *Self, atom: *AtomBase) ?*Object {
+    pub fn get_slot(self: *Self, atom: *Atom) ?*Object {
         if (self.info.storage_mode != .none) {
             if (!atom.typeCheckSelf()) {
                 py.typeError("Atom", .{}) catch return null;
@@ -214,7 +214,7 @@ pub const MemberBase = extern struct {
             py.attributeError("set_slot takes 2 arguments", .{}) catch return null;
         }
         if (self.info.storage_mode != .none) {
-            const atom: *AtomBase = @ptrCast(args[0]);
+            const atom: *Atom = @ptrCast(args[0]);
             if (!atom.typeCheckSelf()) {
                 py.typeError("Atom", .{}) catch return null;
             }
@@ -246,7 +246,7 @@ pub const MemberBase = extern struct {
         py.attributeError("Member has no slot", .{}) catch return null;
     }
 
-    pub fn del_slot(self: *Self, atom: *AtomBase) ?*Object {
+    pub fn del_slot(self: *Self, atom: *Atom) ?*Object {
         if (self.info.storage_mode != .none) {
             if (!atom.typeCheckSelf()) {
                 return py.typeErrorObject(null, "Atom", .{});
@@ -335,10 +335,10 @@ pub const MemberBase = extern struct {
     }
 
     pub fn notify(self: *Self, args: [*]*Object, n: isize) ?*Object {
-        if (n < 1 or n > 2 or !AtomBase.check(args[0])) {
+        if (n < 1 or n > 2 or !Atom.check(args[0])) {
             return py.typeErrorObject(null, "Invalid arguments: Signature is notify(atom: Atom, change = None)", .{});
         }
-        const atom: *AtomBase = @ptrCast(args[0]);
+        const atom: *Atom = @ptrCast(args[0]);
         if (n == 2) {
             atom.notifyInternal(self.name.?, .{args[1]}, @intFromEnum(ChangeType.any)) catch return null;
         } else {
@@ -375,7 +375,7 @@ pub const MemberBase = extern struct {
     // --------------------------------------------------------------------------
     // Internal api
     // --------------------------------------------------------------------------
-    pub inline fn validate(self: *Self, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
+    pub inline fn validate(self: *Self, atom: *Atom, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
         // Zig is able to inline validation of everything except the custom
         // containers that require coercion.
         @setEvalBranchQuota(10000);
@@ -411,7 +411,7 @@ pub const MemberBase = extern struct {
     }
 
     // Helper function for validation failures
-    pub inline fn validateFail(self: *const Self, atom: *AtomBase, value: *Object, expected: [:0]const u8) py.Error!void {
+    pub inline fn validateFail(self: *const Self, atom: *Atom, value: *Object, expected: [:0]const u8) py.Error!void {
         // TODO: include name of "owner"
         return py.typeError("The '{s}' member on the '{s}' object must be of type '{s}'. Got object of type '{s}' instead", .{
             self.name.?.data(),
@@ -486,7 +486,7 @@ pub const MemberBase = extern struct {
         return null;
     }
 
-    pub fn shouldNotify(self: *Self, atom: *AtomBase) bool {
+    pub fn shouldNotify(self: *Self, atom: *Atom) bool {
         return (!atom.info.notifications_disabled and atom.hasAnyObservers(self.name.?) catch unreachable);
     }
 
@@ -497,11 +497,11 @@ pub const MemberBase = extern struct {
         return false;
     }
 
-    pub fn notifyChange(self: *Self, atom: *AtomBase, change: *Dict, change_type: ChangeType) !void {
+    pub fn notifyChange(self: *Self, atom: *Atom, change: *Dict, change_type: ChangeType) !void {
         try atom.notifyInternal(self.name.?, .{change}, @intFromEnum(change_type));
     }
 
-    pub fn notifyCreate(self: *Self, atom: *AtomBase, newvalue: *Object) !void {
+    pub fn notifyCreate(self: *Self, atom: *Atom, newvalue: *Object) !void {
         if (self.shouldNotify(atom)) {
             var change: *Dict = try Dict.new();
             defer change.decref();
@@ -513,7 +513,7 @@ pub const MemberBase = extern struct {
         }
     }
 
-    pub fn notifyUpdate(self: *Self, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) !void {
+    pub fn notifyUpdate(self: *Self, atom: *Atom, oldvalue: *Object, newvalue: *Object) !void {
         if (oldvalue != newvalue and self.shouldNotify(atom)) {
             var change: *Dict = try Dict.new();
             defer change.decref();
@@ -526,7 +526,7 @@ pub const MemberBase = extern struct {
         }
     }
 
-    pub fn notifyDelete(self: *Self, atom: *AtomBase, oldvalue: *Object) !void {
+    pub fn notifyDelete(self: *Self, atom: *Atom, oldvalue: *Object) !void {
         if (self.shouldNotify(atom)) {
             var change: *Dict = try Dict.new();
             defer change.decref();
@@ -581,7 +581,7 @@ pub const MemberBase = extern struct {
     // Generic implementation to generate the default value
     // The impl can override per mode as needed.
     // Returns new reference
-    pub inline fn default(self: *MemberBase, comptime impl: type, atom: *AtomBase) !*Object {
+    pub inline fn default(self: *MemberBase, comptime impl: type, atom: *Atom) !*Object {
         switch (self.info.default_mode) {
             .static => {
                 if (comptime @hasDecl(impl, "defaultStatic")) {
@@ -728,7 +728,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         // Custom member api
         // --------------------------------------------------------------------------
         // Returns new reference
-        pub inline fn default(self: *Self, atom: *AtomBase) !*Object {
+        pub inline fn default(self: *Self, atom: *Atom) !*Object {
             if (comptime @hasDecl(impl, "default")) {
                 return impl.default(@ptrCast(self), atom);
             }
@@ -737,7 +737,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
 
         // Default write slot implementation. It does not need to worry about discarding the old value but must
         // return whether it stole a reference to value or borrowed it so the caller can know how to handle it.
-        pub inline fn writeSlot(self: *Self, atom: *AtomBase, slot: *?*Object, value: *Object) py.Error!Ownership {
+        pub inline fn writeSlot(self: *Self, atom: *Atom, slot: *?*Object, value: *Object) py.Error!Ownership {
             switch (comptime storage_mode) {
                 .pointer => {
                     if (comptime @hasDecl(impl, "writeSlotPointer")) {
@@ -748,7 +748,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 },
                 .static => {
                     if (comptime !@hasDecl(impl, "writeSlotStatic")) {
-                        @compileError("member impl must provide a writeSlotStatic function if storage mode is static. Signature is `pub fn writeSlotStatic(self: *MemberBase, atom: *AtomBase, value: *Object) py.Error!usize`");
+                        @compileError("member impl must provide a writeSlotStatic function if storage mode is static. Signature is `pub fn writeSlotStatic(self: *MemberBase, atom: *Atom, value: *Object) py.Error!usize`");
                     }
                     const ptr: *usize = @ptrCast(slot);
                     const data_mask = self.base.slotDataMask();
@@ -767,7 +767,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         }
 
         // Default delete slot implementation. It does not need to worry about discarding the old value
-        pub inline fn deleteSlot(self: *Self, _: *AtomBase, slot: *?*Object) void {
+        pub inline fn deleteSlot(self: *Self, _: *Atom, slot: *?*Object) void {
             switch (comptime storage_mode) {
                 .pointer => {
                     slot.* = null;
@@ -786,7 +786,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         // Default read slot implementation.
         // pointer storage mode must return borrowed reference
         // static storage mode always returns a new reference
-        pub inline fn readSlot(self: *Self, atom: *AtomBase, slot: *?*Object) py.Error!?*Object {
+        pub inline fn readSlot(self: *Self, atom: *Atom, slot: *?*Object) py.Error!?*Object {
             switch (comptime storage_mode) {
                 .pointer => {
                     if (comptime @hasDecl(impl, "readSlotPointer")) {
@@ -798,7 +798,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 },
                 .static => {
                     if (comptime !@hasDecl(impl, "readSlotStatic")) {
-                        @compileError("member impl must provide a readSlotStatic if storage mode is static. Signature is `pub fn readSlotStatic(self: *MemberBase, atom: *AtomBase, data: usize) py.Error!?*Object`");
+                        @compileError("member impl must provide a readSlotStatic if storage mode is static. Signature is `pub fn readSlotStatic(self: *MemberBase, atom: *Atom, data: usize) py.Error!?*Object`");
                     }
                     const ptr: *usize = @ptrCast(slot);
                     const value = ptr.*;
@@ -815,7 +815,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
 
         // Default getattr implementation provides normal slot behavior
         // Returns new reference
-        pub inline fn getattr(self: *Self, atom: *AtomBase) py.Error!*Object {
+        pub inline fn getattr(self: *Self, atom: *Atom) py.Error!*Object {
             if (comptime @hasDecl(impl, "getattr")) {
                 return impl.getattr(@ptrCast(self), atom);
             }
@@ -847,7 +847,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         }
 
         // Default setattr implementation provides normal slot behavior
-        pub inline fn setattr(self: *Self, atom: *AtomBase, newvalue: *Object) py.Error!void {
+        pub inline fn setattr(self: *Self, atom: *Atom, newvalue: *Object) py.Error!void {
             if (comptime @hasDecl(impl, "setattr")) {
                 return impl.setattr(@ptrCast(self), atom, newvalue);
             }
@@ -886,7 +886,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         }
 
         // Default delattr implementation
-        pub inline fn delattr(self: *Self, atom: *AtomBase) py.Error!void {
+        pub inline fn delattr(self: *Self, atom: *Atom) py.Error!void {
             if (comptime @hasDecl(impl, "delattr")) {
                 return impl.delattr(@ptrCast(self), atom);
             }
@@ -907,11 +907,11 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
             }
         }
 
-        pub fn validateGeneric(self: *MemberBase, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
+        pub fn validateGeneric(self: *MemberBase, atom: *Atom, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
             return validate(@ptrCast(self), atom, oldvalue, newvalue);
         }
 
-        pub inline fn validate(self: *Self, atom: *AtomBase, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
+        pub inline fn validate(self: *Self, atom: *Atom, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
             if (comptime @hasDecl(impl, "coerce") and @hasDecl(impl, "validate")) {
                 const coerced = try impl.coerce(@ptrCast(self), atom, oldvalue, newvalue);
                 defer coerced.decref();
@@ -976,7 +976,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
             return 0;
         }
 
-        pub fn __get__(self: *Self, cls: ?*AtomBase, _: ?*Object) ?*Object {
+        pub fn __get__(self: *Self, cls: ?*Atom, _: ?*Object) ?*Object {
             if (cls) |atom| {
                 if (!atom.typeCheckSelf()) {
                     return py.typeErrorObject(null, "Members can only be used on Atom objects", .{});
@@ -986,7 +986,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
             return @ptrCast(self.newref());
         }
 
-        pub fn __set__(self: *Self, atom: *AtomBase, value: ?*Object) c_int {
+        pub fn __set__(self: *Self, atom: *Atom, value: ?*Object) c_int {
             if (!atom.typeCheckSelf()) {
                 py.typeError("Members can only be used on Atom objects", .{}) catch return -1;
             }

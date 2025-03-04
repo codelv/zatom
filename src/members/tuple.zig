@@ -3,7 +3,7 @@ const std = @import("std");
 const Object = py.Object;
 const Tuple = py.Tuple;
 const Dict = py.Dict;
-const AtomBase = @import("../atom.zig").AtomBase;
+const Atom = @import("../atom.zig").Atom;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
 const Member = member.Member;
@@ -56,7 +56,7 @@ pub const TupleMember = Member("Tuple", 15, struct {
         }
     }
 
-    pub fn coerce(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
+    pub fn coerce(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
         if (!Tuple.check(new)) {
             try self.validateFail(atom, new, "tuple");
             unreachable;

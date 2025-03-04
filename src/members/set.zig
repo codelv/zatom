@@ -5,7 +5,7 @@ const Type = py.Type;
 const Set = py.Set;
 const Tuple = py.Tuple;
 const Dict = py.Dict;
-const AtomBase = @import("../atom.zig").AtomBase;
+const Atom = @import("../atom.zig").Atom;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
 const Member = member.Member;
@@ -21,7 +21,7 @@ pub const TypedSet = extern struct {
     pub var TypeObject: ?*Type = null;
 
     base: Set,
-    validate_context: ?*Tuple = null, // tuple[MemberBase, AtomBase]
+    validate_context: ?*Tuple = null, // tuple[MemberBase, Atom]
 
     pub usingnamespace py.ObjectProtocol(Self);
 
@@ -98,7 +98,7 @@ pub const TypedSet = extern struct {
         return @ptrCast(try TypeObject.?.callArgs(.{items}));
     }
 
-    pub fn newWithContext(items: *Object, validate_member: *MemberBase, atom: *AtomBase) !*TypedSet {
+    pub fn newWithContext(items: *Object, validate_member: *MemberBase, atom: *Atom) !*TypedSet {
         const self: *TypedSet = @ptrCast(try TypeObject.?.callArgs(.{}));
         errdefer self.decref();
         self.validate_context = try Tuple.packNewrefs(.{ validate_member, atom });
@@ -108,9 +108,9 @@ pub const TypedSet = extern struct {
         return @ptrCast(self);
     }
 
-    pub fn hasSameContext(self: *Self, validate_member: ?*Object, atom: *AtomBase) bool {
+    pub fn hasSameContext(self: *Self, validate_member: ?*Object, atom: *Atom) bool {
         if (self.validate_context) |tuple| {
-            return (tuple.getUnsafe(0) == validate_member and @as(*AtomBase, @ptrCast(tuple.getUnsafe(1).?)) == atom);
+            return (tuple.getUnsafe(0) == validate_member and @as(*Atom, @ptrCast(tuple.getUnsafe(1).?)) == atom);
         }
         return validate_member == null;
     }
@@ -118,14 +118,14 @@ pub const TypedSet = extern struct {
     pub fn validateItem(self: *Self, item: *Object) py.Error!*Object {
         const tuple = self.validate_context orelse return item.newref();
         const mem: *MemberBase = @ptrCast(tuple.getUnsafe(0).?);
-        const atom: *AtomBase = @ptrCast(tuple.getUnsafe(1).?);
+        const atom: *Atom = @ptrCast(tuple.getUnsafe(1).?);
         return try mem.validate(atom, py.None(), item);
     }
 
     pub fn validateIterable(self: *Self, items: *Object) py.Error!*Object {
         const tuple = self.validate_context orelse return items.newref();
         const mem: *MemberBase = @ptrCast(tuple.getUnsafe(0).?);
-        const atom: *AtomBase = @ptrCast(tuple.getUnsafe(1).?);
+        const atom: *Atom = @ptrCast(tuple.getUnsafe(1).?);
         const iter = try items.iter();
         defer iter.decref();
         const copy = try Set.new(null);
@@ -244,7 +244,7 @@ pub const SetMember = Member("Set", 14, struct {
         }
     }
 
-    pub fn defaultStatic(self: *MemberBase, atom: *AtomBase) !*Object {
+    pub fn defaultStatic(self: *MemberBase, atom: *Atom) !*Object {
         if (self.default_context) |default_value| {
             if (self.validate_context) |validate_member| {
                 // Do it here or it just gets copied again by the coerce function later
@@ -256,7 +256,7 @@ pub const SetMember = Member("Set", 14, struct {
         unreachable;
     }
 
-    pub fn coerce(self: *MemberBase, atom: *AtomBase, _: *Object, value: *Object) py.Error!*Object {
+    pub fn coerce(self: *MemberBase, atom: *Atom, _: *Object, value: *Object) py.Error!*Object {
         if (self.validate_context) |validate_member| {
             if (TypedSet.check(value)) {
                 const typed_set: *TypedSet = @ptrCast(value);

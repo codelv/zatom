@@ -5,7 +5,7 @@ const Tuple = py.Tuple;
 const Dict = py.Dict;
 const Object = py.Object;
 
-const AtomBase = @import("atom.zig").AtomBase;
+const Atom = @import("atom.zig").Atom;
 
 //
 comptime {
@@ -223,7 +223,7 @@ pub const PoolGuard = struct {
 //         }
 //     }
 //
-//     pub fn notify(self: *MemberObservers, allocator: std.mem.Allocator, atom: *AtomBase, args: *Tuple, kwargs: ?*Dict, change_types: u8) !bool {
+//     pub fn notify(self: *MemberObservers, allocator: std.mem.Allocator, atom: *Atom, args: *Tuple, kwargs: ?*Dict, change_types: u8) !bool {
 //         var guard = MemberGuard.init(allocator);
 //         defer guard.deinit();
 //         guard.start(self);

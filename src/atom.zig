@@ -37,7 +37,7 @@ comptime {
 }
 
 // Base Atom class
-pub const AtomBase = extern struct {
+pub const Atom = extern struct {
     const Self = @This();
     // Reference to the type. This is set in ready
     pub var TypeObject: ?*Type = null;
@@ -280,7 +280,7 @@ pub const AtomBase = extern struct {
     pub fn sizeof(self: *Self) ?*Object {
         var size: usize = @sizeOf(Self);
         if (self.info.slot_count > 1) {
-            // One slot is already counted for in AtomBase
+            // One slot is already counted for in A
             size += (self.info.slot_count - 1) * @sizeOf(?*Object);
         }
         if (self.dynamicObserverPool()) |pool| {
@@ -376,8 +376,8 @@ pub const AtomBase = extern struct {
         .{}, // sentinel
     };
     pub var TypeSpec = py.TypeSpec{
-        .name = package_name ++ ".AtomBase",
-        .basicsize = @sizeOf(AtomBase),
+        .name = package_name ++ ".Atom",
+        .basicsize = @sizeOf(Self),
         .flags = (py.c.Py_TPFLAGS_DEFAULT | py.c.Py_TPFLAGS_BASETYPE | py.c.Py_TPFLAGS_HAVE_GC),
         .slots = @constCast(@ptrCast(&type_slots)),
     };
@@ -399,7 +399,7 @@ pub const AtomBase = extern struct {
 };
 
 comptime {
-    const size = @sizeOf(AtomBase);
+    const size = @sizeOf(Atom);
     if (size != 32) {
         @compileLog("Expected 32 bytes got {}", .{size});
     }
@@ -409,15 +409,15 @@ comptime {
 pub fn initModule(mod: *py.Module) !void {
     frozen_str = try py.Str.internFromString("--frozen");
     errdefer py.clear(&frozen_str);
-    try AtomBase.initType();
-    errdefer AtomBase.deinitType();
+    try Atom.initType();
+    errdefer Atom.deinitType();
 
     // The metaclass generates subclasses
-    try mod.addObjectRef("Atom", @ptrCast(AtomBase.TypeObject.?));
+    try mod.addObjectRef("Atom", @ptrCast(Atom.TypeObject.?));
 }
 
 pub fn deinitModule(mod: *py.Module) void {
     py.clear(&frozen_str);
-    AtomBase.deinitType();
+    Atom.deinitType();
     _ = mod; // TODO: Remove dead type
 }

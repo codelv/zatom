@@ -4,7 +4,7 @@ const Object = py.Object;
 const Type = py.Type;
 const Tuple = py.Tuple;
 const Dict = py.Dict;
-const AtomBase = @import("../atom.zig").AtomBase;
+const Atom = @import("../atom.zig").Atom;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
 const Member = member.Member;
@@ -18,7 +18,7 @@ pub const TypedDict = extern struct {
     pub var TypeObject: ?*Type = null;
 
     base: Dict,
-    validate_context: ?*Tuple = null, // tuple[Optional[MemberBase], Optional[MemberBase], AtomBase]
+    validate_context: ?*Tuple = null, // tuple[Optional[MemberBase], Optional[MemberBase], Atom]
 
     pub usingnamespace py.ObjectProtocol(Self);
 
@@ -73,7 +73,7 @@ pub const TypedDict = extern struct {
         return @ptrCast(try TypeObject.?.callArgs(.{items}));
     }
 
-    pub fn newWithContext(items: *Object, key_member: *MemberBase, value_member: *MemberBase, atom: *AtomBase) !*TypedDict {
+    pub fn newWithContext(items: *Object, key_member: *MemberBase, value_member: *MemberBase, atom: *Atom) !*TypedDict {
         if (key_member.isNone() and value_member.isNone()) {
             try py.typeError("Cannot create TypedDict with no validators. Use a normal dict", .{});
         }
@@ -119,9 +119,9 @@ pub const TypedDict = extern struct {
         return @ptrCast(self);
     }
 
-    pub fn hasSameContext(self: *Self, key_member: *Object, value_member: *Object, atom: *AtomBase) bool {
+    pub fn hasSameContext(self: *Self, key_member: *Object, value_member: *Object, atom: *Atom) bool {
         if (self.validate_context) |tuple| {
-            return (tuple.getUnsafe(0).? == key_member and tuple.getUnsafe(1).? == value_member and @as(*AtomBase, @ptrCast(tuple.getUnsafe(2).?)) == atom);
+            return (tuple.getUnsafe(0).? == key_member and tuple.getUnsafe(1).? == value_member and @as(*Atom, @ptrCast(tuple.getUnsafe(2).?)) == atom);
         }
         return false;
     }
@@ -130,7 +130,7 @@ pub const TypedDict = extern struct {
         if (self.validate_context) |tuple| {
             const key_member: *MemberBase = @ptrCast(tuple.getUnsafe(0).?);
             if (!key_member.isNone()) {
-                const atom: *AtomBase = @ptrCast(tuple.getUnsafe(2).?);
+                const atom: *Atom = @ptrCast(tuple.getUnsafe(2).?);
                 return try key_member.validate(atom, py.None(), key);
             }
         }
@@ -141,7 +141,7 @@ pub const TypedDict = extern struct {
         if (self.validate_context) |tuple| {
             const value_member: *MemberBase = @ptrCast(tuple.getUnsafe(1).?);
             if (!value_member.isNone()) {
-                const atom: *AtomBase = @ptrCast(tuple.getUnsafe(2).?);
+                const atom: *Atom = @ptrCast(tuple.getUnsafe(2).?);
                 return try value_member.validate(atom, py.None(), value);
             }
         }
@@ -271,7 +271,7 @@ pub const DictMember = Member("Dict", 1, struct {
         }
     }
 
-    pub fn defaultStatic(self: *MemberBase, atom: *AtomBase) !*Object {
+    pub fn defaultStatic(self: *MemberBase, atom: *Atom) !*Object {
         if (self.default_context) |default_value| {
             if (self.validate_context) |context| {
                 // Do it here or it just gets copied again by the coerce function later
@@ -287,7 +287,7 @@ pub const DictMember = Member("Dict", 1, struct {
     }
 
     // This cannot be inlined
-    pub fn coerce(self: *const MemberBase, atom: *AtomBase, _: *Object, value: *Object) py.Error!*Object {
+    pub fn coerce(self: *const MemberBase, atom: *Atom, _: *Object, value: *Object) py.Error!*Object {
         if (self.validate_context) |context| {
             const tuple: *Tuple = @ptrCast(context);
             const k = tuple.getUnsafe(0).?;

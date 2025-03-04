@@ -10,7 +10,7 @@ const Str = py.Str;
 const Function = py.Function;
 const Method = py.Method;
 const package_name = @import("api.zig").package_name;
-const AtomBase = @import("atom.zig").AtomBase;
+const Atom = @import("atom.zig").Atom;
 
 var change_types_str: ?*Str = null;
 var change_str: ?*Str = null;
@@ -259,20 +259,20 @@ pub const ExtendedObserver = extern struct {
             newowner = change.getOrError(@ptrCast(value_str.?)) catch return null;
         } else if (change_type.is(delete_str.?)) {
             oldowner = change.getOrError(@ptrCast(value_str.?)) catch return null;
-//             if (AtomBase.check(owner)) {
-//                 const atom: *AtomBase = @ptrCast(owner);
+//             if (Atom.check(owner)) {
+//                 const atom: *Atom = @ptrCast(owner);
 //             }
         }
 
 
 
 
-        if (AtomBase.check(oldowner) and self.meth != null) {
-            const atom: *AtomBase = @ptrCast(oldowner);
+        if (Atom.check(oldowner) and self.meth != null) {
+            const atom: *Atom = @ptrCast(oldowner);
             atom.removeDynamicObserver(self.attr.?, @ptrCast(self.meth.?)) catch return null;
         }
-        if (AtomBase.check(newowner)) {
-            const atom: *AtomBase = @ptrCast(newowner);
+        if (Atom.check(newowner)) {
+            const atom: *Atom = @ptrCast(newowner);
             py.xsetref(@ptrCast(&self.meth), @ptrCast(Method.new(self.func.?, owner) catch return null));
             atom.addDynamicObserver(self.attr.?, @ptrCast(self.meth.?), 0xff) catch return null;
         } else if (!newowner.isNone()) {

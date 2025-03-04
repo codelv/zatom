@@ -8,7 +8,7 @@ const List = py.List;
 const Tuple = py.Tuple;
 const Dict = py.Dict;
 const Slice = py.Slice;
-const AtomBase = @import("../atom.zig").AtomBase;
+const Atom = @import("../atom.zig").Atom;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
 const Member = member.Member;
@@ -24,7 +24,7 @@ pub const TypedList = extern struct {
     pub var TypeObject: ?*py.Type = null;
 
     base: List,
-    validate_context: ?*Tuple = null, // tuple[MemberBase, AtomBase]
+    validate_context: ?*Tuple = null, // tuple[MemberBase, Atom]
 
     pub usingnamespace py.ObjectProtocol(Self);
 
@@ -98,7 +98,7 @@ pub const TypedList = extern struct {
         return @ptrCast(try TypeObject.?.callArgs(.{items}));
     }
 
-    pub fn newWithContext(items: *Object, validate_member: *MemberBase, atom: *AtomBase) !*TypedList {
+    pub fn newWithContext(items: *Object, validate_member: *MemberBase, atom: *Atom) !*TypedList {
         if (!List.check(items)) {
             try validate_member.validateFail(atom, items, "list");
             unreachable;
@@ -130,9 +130,9 @@ pub const TypedList = extern struct {
         return @ptrCast(self);
     }
 
-    pub fn hasSameContext(self: *Self, validate_member: ?*Object, atom: *AtomBase) bool {
+    pub fn hasSameContext(self: *Self, validate_member: ?*Object, atom: *Atom) bool {
         if (self.validate_context) |tuple| {
-            return (tuple.getUnsafe(0) == validate_member and @as(*AtomBase, @ptrCast(tuple.getUnsafe(1).?)) == atom);
+            return (tuple.getUnsafe(0) == validate_member and @as(*Atom, @ptrCast(tuple.getUnsafe(1).?)) == atom);
         }
         return validate_member == null;
     }
@@ -140,14 +140,14 @@ pub const TypedList = extern struct {
     pub inline fn validateOne(self: *Self, item: *Object) py.Error!*Object {
         const tuple = self.validate_context orelse return item.newref();
         const mem: *MemberBase = @ptrCast(tuple.getUnsafe(0).?);
-        const atom: *AtomBase = @ptrCast(tuple.getUnsafe(1).?);
+        const atom: *Atom = @ptrCast(tuple.getUnsafe(1).?);
         return try mem.validate(atom, py.None(), item);
     }
 
     pub inline fn validateMany(self: *Self, items: *Object) py.Error!*Object {
         const tuple = self.validate_context orelse return items.newref();
         const mem: *MemberBase = @ptrCast(tuple.getUnsafe(0).?);
-        const atom: *AtomBase = @ptrCast(tuple.getUnsafe(1).?);
+        const atom: *Atom = @ptrCast(tuple.getUnsafe(1).?);
         if (!List.check(items)) {
             try mem.validateFail(atom, items, "list");
             unreachable;
@@ -266,7 +266,7 @@ pub const ListMember = Member("List", 6, struct {
         }
     }
 
-    pub fn defaultStatic(self: *MemberBase, atom: *AtomBase) !*Object {
+    pub fn defaultStatic(self: *MemberBase, atom: *Atom) !*Object {
         if (self.default_context) |default_value| {
             if (self.validate_context) |validate_member| {
                 // Do it here or it just gets copied again by the coerce function later
@@ -279,7 +279,7 @@ pub const ListMember = Member("List", 6, struct {
     }
 
     // This cannot be inlined
-    pub fn coerce(self: *MemberBase, atom: *AtomBase, _: *Object, value: *Object) py.Error!*Object {
+    pub fn coerce(self: *MemberBase, atom: *Atom, _: *Object, value: *Object) py.Error!*Object {
         if (self.validate_context) |validate_member| {
             if (TypedList.check(value)) {
                 const typed_list: *TypedList = @ptrCast(value);

@@ -1,7 +1,7 @@
 const py = @import("../api.zig").py;
 const std = @import("std");
 const Object = py.Object;
-const AtomBase = @import("../atom.zig").AtomBase;
+const Atom = @import("../atom.zig").Atom;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
 const StorageMode = member.StorageMode;
@@ -20,7 +20,7 @@ pub const ValueMember = Member("Value", 7, struct {
 });
 
 pub const CallableMember = Member("Callable", 8, struct {
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
+    pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
         if (!new.isCallable()) {
             try self.validateFail(atom, new, "callable");
             unreachable;
@@ -37,15 +37,15 @@ pub const BoolMember = Member("Bool", 9, struct {
         return py.returnFalse();
     }
 
-    pub inline fn writeSlotStatic(_: *MemberBase, _: *AtomBase, value: *Object) py.Error!usize {
+    pub inline fn writeSlotStatic(_: *MemberBase, _: *Atom, value: *Object) py.Error!usize {
         return @intFromBool(value == py.True());
     }
 
-    pub inline fn readSlotStatic(_: *MemberBase, _: *AtomBase, data: usize) py.Error!?*Object {
+    pub inline fn readSlotStatic(_: *MemberBase, _: *Atom, data: usize) py.Error!?*Object {
         return py.returnBool(data != 0);
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
+    pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
         if (!py.Bool.check(new)) {
             try self.validateFail(atom, new, "bool");
             unreachable;
@@ -58,7 +58,7 @@ pub const IntMember = Member("Int", 10, struct {
     pub inline fn initDefault() !?*Object {
         return @ptrCast(try py.Int.new(0));
     }
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
+    pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
         if (!py.Int.check(new)) {
             try self.validateFail(atom, new, "int");
             unreachable;
@@ -71,7 +71,7 @@ pub const FloatMember = Member("Float", 11, struct {
     pub inline fn initDefault() !?*Object {
         return @ptrCast(try py.Float.new(0.0));
     }
-    pub inline fn coerce(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
+    pub inline fn coerce(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
         if (!py.Float.check(new)) {
             if (self.info.coerce and py.Int.check(new)) {
                 const value = try py.Int.as(@ptrCast(new), f64);
@@ -89,7 +89,7 @@ pub const StrMember = Member("Str", 12, struct {
         return @ptrCast(empty_str.?.newref());
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
+    pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
         if (!py.Str.check(new)) {
             try self.validateFail(atom, new, "str");
             unreachable;
@@ -103,7 +103,7 @@ pub const BytesMember = Member("Bytes", 13, struct {
         return @ptrCast(empty_bytes.?.newref());
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
+    pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
         if (!py.Bytes.check(new)) {
             try self.validateFail(atom, new, "bytes");
             unreachable;

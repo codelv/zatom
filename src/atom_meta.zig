@@ -10,7 +10,7 @@ const List = py.List;
 const Tuple = py.Tuple;
 
 const atom = @import("atom.zig");
-const AtomBase = atom.AtomBase;
+const Atom = atom.Atom;
 const MemberBase = @import("member.zig").MemberBase;
 const observer_pool = @import("observer_pool.zig");
 const PoolManager = observer_pool.PoolManager;
@@ -86,7 +86,7 @@ pub const AtomMeta = extern struct {
         return obj.typeCheck(TypeObject.?);
     }
 
-    // Create an AtomBase subclass
+    // Create an Atom subclass
     pub fn new(meta: *AtomMeta, args: *Tuple, kwargs: ?*Dict) ?*Object {
         return newOrError(meta, args, kwargs) catch return null;
     }
@@ -125,7 +125,7 @@ pub const AtomMeta = extern struct {
         // Modify the bases
         const num_bases = try bases.size();
         if (num_bases == 0) {
-            try py.typeError("AtomMeta must contain AtomBase", .{});
+            try py.typeError("AtomMeta must contain Atom", .{});
         }
 
         var inherited_members = AtomMembers{};
@@ -139,7 +139,7 @@ pub const AtomMeta = extern struct {
         var found_atom: bool = false;
         for (0..num_bases) |i| {
             const base = bases.getUnsafe(i).?;
-            const is_atom_subclass = try base.isSubclass(@ptrCast(AtomBase.TypeObject.?));
+            const is_atom_subclass = try base.isSubclass(@ptrCast(Atom.TypeObject.?));
             if (is_atom_subclass) {
                 found_atom = true;
                 const atom_base: *AtomMeta = @ptrCast(base);
@@ -152,7 +152,7 @@ pub const AtomMeta = extern struct {
             }
         }
         if (!found_atom) {
-            try py.typeError("AtomMeta must contain AtomBase or a subclass", .{});
+            try py.typeError("AtomMeta must contain Atom or a subclass", .{});
         }
 
         // Gather members from the class
@@ -205,7 +205,7 @@ pub const AtomMeta = extern struct {
         // Modify the basicsize so instances allocate the correct size
         if (slot_count > 1) {
             const extra_slots = slot_count - 1;
-            cls.base.impl.ht_type.tp_basicsize = @intCast(@sizeOf(AtomBase) + extra_slots * @sizeOf(*Object));
+            cls.base.impl.ht_type.tp_basicsize = @intCast(@sizeOf(Atom) + extra_slots * @sizeOf(*Object));
         }
         cls.slot_count = @intCast(slot_count);
         cls.pool_manager = try PoolManager.new(py.allocator);

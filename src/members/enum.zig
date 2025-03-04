@@ -4,7 +4,7 @@ const Object = py.Object;
 const Tuple = py.Tuple;
 const Dict = py.Dict;
 const Str = py.Str;
-const AtomBase = @import("../atom.zig").AtomBase;
+const Atom = @import("../atom.zig").Atom;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
 const StorageMode = member.StorageMode;
@@ -44,19 +44,19 @@ pub const EnumMember = Member("Enum", 2, struct {
         self.validate_context = @ptrCast(args.newref());
     }
 
-    pub inline fn writeSlotStatic(self: *MemberBase, _: *AtomBase, value: *Object) py.Error!usize {
+    pub inline fn writeSlotStatic(self: *MemberBase, _: *Atom, value: *Object) py.Error!usize {
         const items: *Tuple = @ptrCast(self.validate_context.?);
         const data = try items.index(value);
         return data;
     }
 
-    pub inline fn readSlotStatic(self: *MemberBase, _: *AtomBase, data: usize) py.Error!?*Object {
+    pub inline fn readSlotStatic(self: *MemberBase, _: *Atom, data: usize) py.Error!?*Object {
         const items: *Tuple = @ptrCast(self.validate_context.?);
         const value = try items.get(data);
         return value.newref();
     }
 
-    pub inline fn validate(self: *MemberBase, atom: *AtomBase, _: *Object, new: *Object) py.Error!*Object {
+    pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
         const items: *Tuple = @ptrCast(self.validate_context.?);
         if (!try items.contains(new)) {
             try py.valueError("invalid enum value for '{s}' of '{s}'. Got '{s}'", .{

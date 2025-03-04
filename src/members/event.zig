@@ -6,7 +6,7 @@ const Dict = py.Dict;
 const Tuple = py.Tuple;
 const Str = py.Str;
 const package_name = @import("../api.zig").package_name;
-const AtomBase = @import("../atom.zig").AtomBase;
+const Atom = @import("../atom.zig").Atom;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
 const StorageMode = member.StorageMode;
@@ -25,7 +25,7 @@ pub const EventBinder = extern struct {
     // Reference to the type. This is set in ready
     pub var TypeObject: ?*py.Type = null;
     base: Object,
-    atom: ?*AtomBase,
+    atom: ?*Atom,
     member: ?*EventMember,
 
     pub usingnamespace py.ObjectProtocol(Self);
@@ -37,7 +37,7 @@ pub const EventBinder = extern struct {
 
     pub fn new(cls: *Type, args: *Tuple, _: ?*Dict) ?*Self {
         var _member: *EventMember = undefined;
-        var _atom: *AtomBase = undefined;
+        var _atom: *Atom = undefined;
         args.parseTyped(.{ &_member, &_atom }) catch return null;
         const self: *Self = @ptrCast(cls.genericNew(null, null) catch return null);
         self.member = _member.newref();
@@ -155,11 +155,11 @@ pub const EventMember = Member("Event", 3, struct {
         }
     }
 
-    pub fn getattr(self: *MemberBase, atom: *AtomBase) !*Object {
+    pub fn getattr(self: *MemberBase, atom: *Atom) !*Object {
         return @ptrCast(try EventBinder.TypeObject.?.callArgs(.{ self, atom }));
     }
 
-    pub fn validate(self: *MemberBase, atom: *AtomBase, oldvalue: *Object, value: *Object) py.Error!*Object {
+    pub fn validate(self: *MemberBase, atom: *Atom, oldvalue: *Object, value: *Object) py.Error!*Object {
         if (self.validate_context) |context| {
             std.debug.assert(InstanceMember.check(context));
             const instance: *InstanceMember = @ptrCast(context);
@@ -168,7 +168,7 @@ pub const EventMember = Member("Event", 3, struct {
         return value.newref();
     }
 
-    pub fn setattr(self: *MemberBase, atom: *AtomBase, newvalue: *Object) !void {
+    pub fn setattr(self: *MemberBase, atom: *Atom, newvalue: *Object) !void {
         if (self.shouldNotify(atom)) {
             const value = try validate(self, atom, py.None(), newvalue);
             defer value.decref();
@@ -183,7 +183,7 @@ pub const EventMember = Member("Event", 3, struct {
         }
     }
 
-    pub fn delattr(_: *MemberBase, _: *AtomBase) !void {
+    pub fn delattr(_: *MemberBase, _: *Atom) !void {
         return py.typeError("cannot delete the value of an event", .{});
     }
 });
