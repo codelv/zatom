@@ -60,7 +60,7 @@ pub const EnumMember = Member("Enum", 2, struct {
         const items: *Tuple = @ptrCast(self.validate_context.?);
         if (!try items.contains(new)) {
             try py.valueError("invalid enum value for '{s}' of '{s}'. Got '{s}'", .{
-                self.name.data(),
+                self.name.?.data(),
                 atom.typeName(),
                 new.typeName(),
             });

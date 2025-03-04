@@ -8,7 +8,7 @@ const Int = py.Int;
 const Method = py.Method;
 const Function = py.Function;
 const package_name = @import("api.zig").package_name;
-const AtomBase = @import("atom.zig").AtomBase;
+const Atom = @import("atom.zig").Atom;
 
 pub fn MethodWrapper(comptime T: type) type {
     return extern struct {
@@ -42,7 +42,7 @@ pub fn MethodWrapper(comptime T: type) type {
         // should return a borrowed reference
         pub fn resolve(self: *Self) !*Object {
             switch (T) {
-                AtomBase => self.ref.data(),
+                Atom => self.ref.data(),
                 Object => @ptrCast(py.c.PyWeakref_GET_OBJECT(self.ref)),
                 else => @compileError("MethodWrapper resolve not implemented for " ++ @typeName(T)),
             }
@@ -126,7 +126,7 @@ pub fn MethodWrapper(comptime T: type) type {
     };
 }
 
-const all_types = .{ MethodWrapper(Object), MethodWrapper(AtomBase) };
+const all_types = .{ MethodWrapper(Object), MethodWrapper(Atom) };
 
 pub fn initModule(_: *py.Module) !void {
     inline for (all_types) |T| {

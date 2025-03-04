@@ -66,7 +66,7 @@ pub const MemberBase = extern struct {
     default_context: ?*Object = null,
     validate_context: ?*Object = null,
     coercer_context: ?*Object = null,
-    name: *Str = undefined,
+    name: ?*Str = null,
     // The class or parent member which owns this member
     owner: ?*Object = null,
     info: MemberInfo,
@@ -90,15 +90,15 @@ pub const MemberBase = extern struct {
     // --------------------------------------------------------------------------
 
     pub fn get_name(self: *Self) *Str {
-        return self.name.newref();
+        return self.name.?.newref();
     }
 
     pub fn set_name(self: *Self, value: *Object, _: ?*anyopaque) c_int {
         if (!Str.checkExact(value)) {
             return py.typeErrorObject(-1, "Member name must be a str", .{});
         }
-        py.setref(@ptrCast(&self.name), value.newref());
-        Str.internInPlace(@ptrCast(&self.name));
+        py.xsetref(@ptrCast(&self.name), value.newref());
+        Str.internInPlace(@ptrCast(&self.name.?));
         return 0;
     }
 
@@ -270,7 +270,7 @@ pub const MemberBase = extern struct {
 
     pub fn has_observers(self: *Self) ?*Object {
         if (self.staticObservers()) |pool| {
-            return py.returnBool(pool.hasTopic(self.name) catch return null);
+            return py.returnBool(pool.hasTopic(self.name.?) catch return null);
         }
         return py.returnFalse();
     }
@@ -288,7 +288,7 @@ pub const MemberBase = extern struct {
             change_types = Int.as(@ptrCast(args[1]), u8) catch return null;
         }
         if (self.staticObservers()) |pool| {
-            return py.returnBool(pool.hasObserver(self.name, args[0], change_types) catch return null);
+            return py.returnBool(pool.hasObserver(self.name.?, args[0], change_types) catch return null);
         }
         return py.returnFalse();
     }
@@ -315,7 +315,7 @@ pub const MemberBase = extern struct {
 
         if (self.staticAtomMeta()) |meta| {
             if (meta.staticObserverPool() catch return null) |pool| {
-                pool.addObserver(py.allocator, self.name, observer, change_types) catch return null;
+                pool.addObserver(py.allocator, self.name.?, observer, change_types) catch return null;
             }
         } else {
             return py.typeErrorObject(null, "Cannot add a static observer on a nested member", .{});
@@ -325,13 +325,13 @@ pub const MemberBase = extern struct {
 
     pub fn remove_static_observer(self: *Self, observer: *Object) ?*Object {
         if (self.staticObservers()) |pool| {
-            pool.removeObserver(py.allocator, self.name, observer) catch return null;
+            pool.removeObserver(py.allocator, self.name.?, observer) catch return null;
         }
         return py.returnNone();
     }
 
     pub fn clone(self: *Self) ?*Object {
-        return self.cloneInternal() catch return null;
+        return self.cloneOrError() catch return null;
     }
 
     pub fn notify(self: *Self, args: [*]*Object, n: isize) ?*Object {
@@ -340,9 +340,9 @@ pub const MemberBase = extern struct {
         }
         const atom: *AtomBase = @ptrCast(args[0]);
         if (n == 2) {
-            atom.notifyInternal(self.name, .{args[1]}, @intFromEnum(ChangeType.any)) catch return null;
+            atom.notifyInternal(self.name.?, .{args[1]}, @intFromEnum(ChangeType.any)) catch return null;
         } else {
-            atom.notifyInternal(self.name, .{}, @intFromEnum(ChangeType.any)) catch return null;
+            atom.notifyInternal(self.name.?, .{}, @intFromEnum(ChangeType.any)) catch return null;
         }
         return py.returnNone();
     }
@@ -414,7 +414,7 @@ pub const MemberBase = extern struct {
     pub inline fn validateFail(self: *const Self, atom: *AtomBase, value: *Object, expected: [:0]const u8) py.Error!void {
         // TODO: include name of "owner"
         return py.typeError("The '{s}' member on the '{s}' object must be of type '{s}'. Got object of type '{s}' instead", .{
-            self.name.data(),
+            self.name.?.data(),
             atom.typeName(),
             expected,
             value.typeName(),
@@ -454,7 +454,7 @@ pub const MemberBase = extern struct {
             return py.typeError("Cannot reuse a member bound to another member", .{});
         }
         item_member.owner = @ptrCast(self.newref());
-        py.setref(@ptrCast(&item_member.name), @ptrCast(name.newref()));
+        py.xsetref(@ptrCast(&item_member.name), @ptrCast(name.newref()));
     }
 
     pub fn unbindValidatorMember(self: *Self, item_member: *MemberBase) !void {
@@ -487,18 +487,18 @@ pub const MemberBase = extern struct {
     }
 
     pub fn shouldNotify(self: *Self, atom: *AtomBase) bool {
-        return (!atom.info.notifications_disabled and atom.hasAnyObservers(self.name) catch unreachable);
+        return (!atom.info.notifications_disabled and atom.hasAnyObservers(self.name.?) catch unreachable);
     }
 
     pub fn hasObserversInternal(self: *Self) bool {
         if (self.staticObservers()) |pool| {
-            return pool.hasTopic(self.name) catch unreachable;
+            return pool.hasTopic(self.name.?) catch unreachable;
         }
         return false;
     }
 
     pub fn notifyChange(self: *Self, atom: *AtomBase, change: *Dict, change_type: ChangeType) !void {
-        try atom.notifyInternal(self.name, .{change}, @intFromEnum(change_type));
+        try atom.notifyInternal(self.name.?, .{change}, @intFromEnum(change_type));
     }
 
     pub fn notifyCreate(self: *Self, atom: *AtomBase, newvalue: *Object) !void {
@@ -507,7 +507,7 @@ pub const MemberBase = extern struct {
             defer change.decref();
             try change.set(@ptrCast(type_str.?), @ptrCast(create_str.?));
             try change.set(@ptrCast(object_str.?), @ptrCast(atom));
-            try change.set(@ptrCast(name_str.?), @ptrCast(self.name));
+            try change.set(@ptrCast(name_str.?), @ptrCast(self.name.?));
             try change.set(@ptrCast(value_str.?), newvalue);
             return self.notifyChange(atom, change, .create);
         }
@@ -519,7 +519,7 @@ pub const MemberBase = extern struct {
             defer change.decref();
             try change.set(@ptrCast(type_str.?), @ptrCast(update_str.?));
             try change.set(@ptrCast(object_str.?), @ptrCast(atom));
-            try change.set(@ptrCast(name_str.?), @ptrCast(self.name));
+            try change.set(@ptrCast(name_str.?), @ptrCast(self.name.?));
             try change.set(@ptrCast(oldvalue_str.?), oldvalue);
             try change.set(@ptrCast(value_str.?), newvalue);
             return self.notifyChange(atom, change, .update);
@@ -532,18 +532,20 @@ pub const MemberBase = extern struct {
             defer change.decref();
             try change.set(@ptrCast(type_str.?), @ptrCast(delete_str.?));
             try change.set(@ptrCast(object_str.?), @ptrCast(atom));
-            try change.set(@ptrCast(name_str.?), @ptrCast(self.name));
+            try change.set(@ptrCast(name_str.?), @ptrCast(self.name.?));
             try change.set(@ptrCast(value_str.?), oldvalue);
             return self.notifyChange(atom, change, .delete);
         }
     }
 
-    pub fn cloneInternal(self: *Self) !*Object {
+    pub fn cloneOrError(self: *Self) !*Object {
         const result: *Self = @ptrCast(try self.typeref().genericNew(null, null));
         errdefer result.decref();
         result.info = self.info;
-        result.name = self.name.newref();
-        errdefer result.name.decref();
+        if (self.name) |name| {
+            result.name = name.newref();
+        }
+        errdefer if (result.name) |o| o.decref();
 
         if (self.owner) |o| {
             result.owner = o.newref();
@@ -839,7 +841,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 return value.newref();
             } else {
                 // @branchHint(.cold);
-                try py.attributeError("Member {s} has no slot", .{self.base.name.data()});
+                try py.attributeError("Member {s} has no slot", .{self.base.name.?.data()});
                 unreachable;
             }
         }

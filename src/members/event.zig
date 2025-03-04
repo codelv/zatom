@@ -25,8 +25,8 @@ pub const EventBinder = extern struct {
     // Reference to the type. This is set in ready
     pub var TypeObject: ?*py.Type = null;
     base: Object,
-    atom: *AtomBase,
-    member: *EventMember,
+    atom: ?*AtomBase,
+    member: ?*EventMember,
 
     pub usingnamespace py.ObjectProtocol(Self);
 
@@ -54,7 +54,7 @@ pub const EventBinder = extern struct {
             py.typeError("An event can be triggered with at most 1 argument", .{}) catch return null;
         }
         const value = if (n == 0) py.None() else args.getUnsafe(0).?;
-        self.member.setattr(self.atom, value) catch return null;
+        self.member.?.setattr(self.atom.?, value) catch return null;
         return py.returnNone();
     }
 
@@ -65,14 +65,14 @@ pub const EventBinder = extern struct {
         if (!callback.isCallable()) {
             py.typeError("Event callback must be callable", .{}) catch return null;
         }
-        const topic = self.member.base.name;
-        self.atom.addDynamicObserver(topic, callback, 0xff) catch return null;
+        const topic = self.member.?.base.name.?;
+        self.atom.?.addDynamicObserver(topic, callback, 0xff) catch return null;
         return py.returnNone();
     }
 
     pub fn unbind(self: *Self, callback: *Object) ?*Object {
-        const topic = self.member.base.name;
-        self.atom.removeDynamicObserver(topic, callback) catch return null;
+        const topic = self.member.?.base.name.?;
+        self.atom.?.removeDynamicObserver(topic, callback) catch return null;
         return py.returnNone();
     }
 

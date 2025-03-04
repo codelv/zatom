@@ -18,9 +18,6 @@ const MAX_INLINE_SLOT_COUNT = 64;
 
 var frozen_str: ?*Str = null;
 
-// These are generated a compt
-pub var atom_types = [_]?*Type{null} ** MAX_INLINE_SLOT_COUNT;
-
 // zig fmt: off
 pub const AtomInfo = packed struct {
     pool_index: u32 = 0,
@@ -407,73 +404,7 @@ comptime {
         @compileLog("Expected 32 bytes got {}", .{size});
     }
 }
-// Generate a type that extends the AtomBase with inlined slots
-pub fn Atom(comptime slot_count: u16) type {
-    if (slot_count < 1) {
-        @compileError("Cannot create an AtomBase subclass with < 1 slot. Use the AtomBase instead");
-    }
-    const extra_slots = slot_count - 1;
-    const AtomSubclass = extern struct {
-        // Reference to the type. This is set in ready
-        pub var TypeObject: ?*Type = null;
-        const Self = @This();
 
-        base: AtomBase,
-        slots: [extra_slots]?*Object,
-
-        comptime {
-            // Check that alignment of base and this class's slots are correct
-            // Otherwise it will start smashing stuff..
-            const slot_size = @sizeOf(?*Object);
-            if (@offsetOf(AtomBase, "slots") + slot_size != @offsetOf(Self, "slots")) {
-                @compileError(std.fmt.comptimePrint("Slots of AtomBase and {} are not contiguous in memory", .{Self}));
-            }
-        }
-
-        // Import the object protocol
-        pub usingnamespace py.ObjectProtocol(@This());
-
-        // Type check the given object. This assumes the module was initialized
-        pub fn check(obj: *const Object) bool {
-            return obj.typeCheck(TypeObject.?);
-        }
-
-        // --------------------------------------------------------------------------
-        // Type definition
-        // --------------------------------------------------------------------------
-        const type_slots = [_]py.TypeSlot{
-            .{}, // sentinel
-        };
-        pub var TypeSpec = py.TypeSpec{
-            .name = package_name ++ std.fmt.comptimePrint(".Atom{}", .{slot_count}),
-            .basicsize = @sizeOf(Self),
-            // All slots are traversed by the base class so this doesn't need the GC flag
-            .flags = (py.c.Py_TPFLAGS_DEFAULT | py.c.Py_TPFLAGS_BASETYPE),
-            .slots = @constCast(@ptrCast(&type_slots)),
-        };
-
-        pub fn initType() !void {
-            if (TypeObject != null) return;
-            // Hack to bypass the metaclass check
-            AtomMeta.disableNew();
-            defer AtomMeta.enableNew();
-            TypeObject = try Type.fromSpecWithBases(&TypeSpec, @ptrCast(AtomBase.TypeObject));
-        }
-
-        pub fn deinitType() void {
-            py.clear(&TypeObject);
-        }
-    };
-
-    comptime {
-        const size = @sizeOf(AtomSubclass);
-        const expected = @sizeOf(AtomBase) + extra_slots * @sizeOf(?*Object);
-        if (size != expected) {
-            @compileError(std.fmt.comptimePrint("AtomSubclass size expected {} bytes got {}", .{ expected, size }));
-        }
-    }
-    return AtomSubclass;
-}
 
 pub fn initModule(mod: *py.Module) !void {
     frozen_str = try py.Str.internFromString("--frozen");
@@ -481,30 +412,12 @@ pub fn initModule(mod: *py.Module) !void {
     try AtomBase.initType();
     errdefer AtomBase.deinitType();
 
-    // Initialize types with fixed slots
-    atom_types[0] = AtomBase.TypeObject.?.newref();
-    atom_types[1] = AtomBase.TypeObject.?.newref();
-    inline for (2..atom_types.len) |i| {
-        const T = Atom(i);
-        try T.initType();
-        errdefer T.deinitType();
-        atom_types[i] = T.TypeObject.?.newref();
-    }
-
     // The metaclass generates subclasses
     try mod.addObjectRef("Atom", @ptrCast(AtomBase.TypeObject.?));
 }
 
 pub fn deinitModule(mod: *py.Module) void {
     py.clear(&frozen_str);
-
-    py.clear(&atom_types[0]);
-    py.clear(&atom_types[1]);
-    inline for (2..atom_types.len) |i| {
-        // Clear the type slot
-        py.clear(&atom_types[i]);
-        Atom(i).deinitType();
-    }
     AtomBase.deinitType();
     _ = mod; // TODO: Remove dead type
 }
