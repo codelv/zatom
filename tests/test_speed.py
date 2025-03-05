@@ -126,6 +126,21 @@ def test_setattr_bool(benchmark, atom):
 
 
 @pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.benchmark(group="coerced")
+def test_setattr_coerced(benchmark, atom):
+    class Obj(atom.Atom):
+        item = atom.Coerced(int, factory=lambda: 0)
+
+    p = Obj()
+    p.item
+
+    def run():
+        p.item = "1"
+
+    benchmark.pedantic(run, rounds=10000, iterations=100)
+
+
+@pytest.mark.parametrize("atom", (catom, zatom))
 @pytest.mark.benchmark(group="validate-set")
 def test_validate_set_int(benchmark, atom):
     class Obj(atom.Atom):
@@ -141,6 +156,7 @@ def test_validate_set_int(benchmark, atom):
         del obj.items
 
     benchmark.pedantic(update, rounds=100, iterations=10)
+
 
 @pytest.mark.parametrize("atom", (catom, zatom))
 @pytest.mark.benchmark(group="validate-tuple")
@@ -158,6 +174,7 @@ def test_validate_tuple_str(benchmark, atom):
         del obj.items
 
     benchmark.pedantic(update, rounds=100, iterations=10)
+
 
 @pytest.mark.parametrize("atom", (catom, zatom))
 @pytest.mark.benchmark(group="validate-list")
@@ -177,14 +194,16 @@ def test_validate_list_int(benchmark, atom):
     benchmark.pedantic(update, rounds=100, iterations=10)
 
 
-
 @pytest.mark.parametrize("atom", (catom, zatom))
 @pytest.mark.benchmark(group="list-append")
 def test_typed_list_append_int(benchmark, atom):
     if atom == "slots":
+
         class Obj:
             __slots__ = ("items",)
+
     else:
+
         class Obj(atom.Atom):
             items = atom.List(atom.Int())
 
@@ -192,9 +211,10 @@ def test_typed_list_append_int(benchmark, atom):
     obj.items = [0]
     if atom != "slots":
         with pytest.raises(TypeError):
-            obj.items.append("1") # Make sure its actually working
+            obj.items.append("1")  # Make sure its actually working
 
-    i = 0;
+    i = 0
+
     def update():
         nonlocal i
         i += 1
@@ -207,10 +227,12 @@ def test_typed_list_append_int(benchmark, atom):
 @pytest.mark.benchmark(group="list-extend")
 def test_typed_list_extend_int(benchmark, atom):
     if atom == "slots":
+
         class Obj:
             __slots__ = ("items",)
 
     else:
+
         class Obj(atom.Atom):
             items = atom.List(atom.Int())
 
@@ -219,7 +241,7 @@ def test_typed_list_extend_int(benchmark, atom):
 
     if atom != "slots":
         with pytest.raises(TypeError):
-            obj.items.extend(["1"]) # Make sure its actually working
+            obj.items.extend(["1"])  # Make sure its actually working
 
     def update():
         obj.items.extend([1, 2, 3])
@@ -233,7 +255,7 @@ def test_observer_decorated_notify(benchmark, atom):
     class Obj(atom.Atom):
         x = atom.Int()
 
-        @atom.observe('x')
+        @atom.observe("x")
         def on_change(self, change):
             pass
 
@@ -244,6 +266,7 @@ def test_observer_decorated_notify(benchmark, atom):
 
     benchmark.pedantic(update, rounds=1000, iterations=10)
 
+
 @pytest.mark.parametrize("atom", (catom, zatom))
 @pytest.mark.benchmark(group="observer-extended-notify")
 def test_observer_decorated_notify(benchmark, atom):
@@ -253,7 +276,7 @@ def test_observer_decorated_notify(benchmark, atom):
     class Obj(atom.Atom):
         pos = atom.Typed(Point, ())
 
-        @atom.observe('pos.x')
+        @atom.observe("pos.x")
         def on_change(self, change):
             pass
 
@@ -266,6 +289,7 @@ def test_observer_decorated_notify(benchmark, atom):
 
     benchmark.pedantic(update, rounds=1000, iterations=10)
 
+
 @pytest.mark.parametrize("atom", (catom, zatom))
 @pytest.mark.benchmark(group="observer-static-notify")
 def test_observer_static_notify(benchmark, atom):
@@ -274,6 +298,7 @@ def test_observer_static_notify(benchmark, atom):
 
     def observer(change):
         pass
+
     Obj.x.add_static_observer(observer)
 
     obj = Obj()

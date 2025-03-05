@@ -102,7 +102,6 @@ pub const TypedList = extern struct {
         if (!List.check(items)) {
             try validate_member.validateFail(atom, items, "list");
             unreachable;
-
         }
         const list: *List = @ptrCast(items);
         const n = try list.size();
@@ -120,7 +119,7 @@ pub const TypedList = extern struct {
             try py.memoryError();
         }
 
-        for(0..n) |i| {
+        for (0..n) |i| {
             const item = list.getUnsafe(i).?;
             const value = try validate_member.validate(atom, py.None(), item);
             self.base.setUnsafe(i, value);
@@ -156,7 +155,7 @@ pub const TypedList = extern struct {
         const n = try list.size();
         const copy = try List.new(n);
         errdefer copy.decref();
-        for(0..n) |i| {
+        for (0..n) |i| {
             const value = try mem.validate(atom, py.None(), list.getUnsafe(i).?);
             copy.setUnsafe(i, value);
         }
@@ -294,7 +293,6 @@ pub const ListMember = Member("List", 6, struct {
         try self.validateFail(atom, value, "list");
         unreachable;
     }
-
 });
 
 pub const all_members = .{

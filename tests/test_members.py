@@ -5,6 +5,8 @@ from zatom.api import (
     AtomMeta,
     Bool,
     Bytes,
+    Coerced,
+    Constant,
     Dict,
     Enum,
     Event,
@@ -93,10 +95,15 @@ def test_int():
     class Pt(Atom):
         x = Int()
         y = Int()
+
+        def _default_y(self):
+            return 3
+
         z = Int(default=2)
 
     p = Pt()
     assert p.x == 0
+    assert p.y == 3
     p.y = 1
     assert p.y == 1
     assert p.z == 2
@@ -155,6 +162,18 @@ def test_bool():
         a.a = "foo"
 
 
+def test_bytes():
+    class A(Atom):
+        data = Bytes()
+
+    a = A()
+    assert a.data == b""
+    a.data = b"123"
+    assert a.data == b"123"
+    with pytest.raises(TypeError):
+        a.data = "123"
+
+
 def test_float():
     class A(Atom):
         x = Float()
@@ -211,6 +230,7 @@ def test_instance():
     with pytest.raises(TypeError):
         a.cls = {}
 
+
 def test_forward_instance():
     class A(Atom):
         other = ForwardInstance(lambda: C, ())
@@ -225,6 +245,19 @@ def test_forward_instance():
     assert type(a.other) == C
     with pytest.raises(TypeError):
         a.other = B()
+
+
+def test_coerced():
+    class A(Atom):
+        count = Coerced(int, (0,))
+
+    a = A()
+    assert a.count == 0
+    a.count = "1"
+    assert a.count == 1
+
+    with pytest.raises(ValueError):
+        a.count = "x"
 
 
 def test_typed():
@@ -343,6 +376,20 @@ def test_event():
         a.clicked(1)
 
 
+def test_constant():
+    class A(Atom):
+        pwd = Constant("foobar")
+
+    a = A()
+    assert a.pwd == "foobar"
+    with pytest.raises(TypeError):
+        a.pwd = "new"
+    assert a.pwd == "foobar"
+    with pytest.raises(TypeError):
+        del a.pwd
+    assert a.pwd == "foobar"
+
+
 def test_set():
     class A(Atom):
         a = Set()
@@ -398,7 +445,7 @@ def test_list():
     with pytest.raises(TypeError):
         a.c = [1]
     with pytest.raises(TypeError):
-       a.c.append(3)
+        a.c.append(3)
 
 
 def test_dict():
@@ -428,7 +475,7 @@ def test_dict():
     a.c = {1: [1, 2]}
 
     with pytest.raises(TypeError):
-       a.c[1].append('4')
+        a.c[1].append("4")
 
     with pytest.raises(TypeError):
         a.c = {1: 2}

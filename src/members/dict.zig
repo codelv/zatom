@@ -92,7 +92,7 @@ pub const TypedDict = extern struct {
 
         var pos: isize = 0;
         var dict: *Dict = @ptrCast(items);
-        if (!key_member.isNone() and  !value_member.isNone()) {
+        if (!key_member.isNone() and !value_member.isNone()) {
             while (dict.next(&pos)) |entry| {
                 const key = try key_member.validate(atom, py.None(), entry.key);
                 defer key.decref();
@@ -305,7 +305,6 @@ pub const DictMember = Member("Dict", 1, struct {
         try self.validateFail(atom, value, "dict");
         unreachable;
     }
-
 });
 
 pub const all_members = .{

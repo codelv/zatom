@@ -115,7 +115,7 @@ pub const Atom = extern struct {
 
     pub fn hasDynamicObserver(self: *Self, topic: *Str, observer: *Object) !bool {
         if (self.dynamicObserverPool()) |pool| {
-            return try pool.hasObserver(topic, observer, @intFromEnum(ChangeType.any));
+            return try pool.hasObserver(topic, observer, @intFromEnum(ChangeType.ANY));
         }
         return false;
     }
@@ -209,7 +209,7 @@ pub const Atom = extern struct {
                 }
                 break :blk Int.as(@ptrCast(v), u8) catch return null;
             }
-            break :blk @intFromEnum(ChangeType.any);
+            break :blk @intFromEnum(ChangeType.ANY);
         };
         if (Str.check(topic)) {
             self.addDynamicObserver(@ptrCast(topic), callback, change_types) catch return null;
@@ -252,9 +252,9 @@ pub const Atom = extern struct {
         }
         const topic: *Str = @ptrCast(args[0]);
         if (n == 2) {
-            self.notifyInternal(topic, .{args[1]}, @intFromEnum(ChangeType.any)) catch return null;
+            self.notifyInternal(topic, .{args[1]}, @intFromEnum(ChangeType.ANY)) catch return null;
         } else {
-            self.notifyInternal(topic, .{}, @intFromEnum(ChangeType.any)) catch return null;
+            self.notifyInternal(topic, .{}, @intFromEnum(ChangeType.ANY)) catch return null;
         }
         return py.returnNone();
     }
@@ -293,6 +293,9 @@ pub const Atom = extern struct {
     // Type def
     // --------------------------------------------------------------------------
     pub fn dealloc(self: *Self) void {
+        if (self.info.has_atomref) {
+            AtomRef.release(self);
+        }
         self.gcUntrack();
         _ = self.clear();
         if (self.dynamicObserverPool() != null) {
@@ -405,6 +408,96 @@ comptime {
     }
 }
 
+pub const AtomRef = extern struct {
+    const Self = @This();
+    // Reference to the type. This is set in ready
+    pub var TypeObject: ?*py.Type = null;
+    const AtomRefMap = std.AutoArrayHashMapUnmanaged(*Atom, *AtomRef);
+    var map: AtomRefMap = .{};
+
+    base: Object,
+    atom: ?*Atom, // This is not tracked
+
+    pub usingnamespace py.ObjectProtocol(Self);
+
+    // Type check the given object. This assumes the module was initialized
+    pub fn check(obj: *const Object) bool {
+        return obj.typeCheck(TypeObject.?);
+    }
+
+    pub fn new(cls: *Type, args: *Tuple, kwargs: ?*Dict) ?*Self {
+        return newOrError(cls, args, kwargs) catch return null;
+    }
+
+    pub fn newOrError(cls: *Type, args: *Tuple, _: ?*Dict) !*Self {
+        var atom: *Atom = undefined;
+        try args.parseTyped(.{&atom});
+        if (map.get(atom)) |ref| {
+            return ref.newref();
+        }
+        const ref: *Self = @ptrCast(try cls.genericNew(null, null));
+        errdefer ref.decref();
+        ref.atom = atom; // Do not incref
+        atom.info.has_atomref = true;
+        map.put(py.allocator, atom, ref) catch {
+            try py.memoryError();
+        };
+        return ref;
+    }
+
+    pub fn call(self: *Self, args: *Tuple, kwargs: ?*Dict) ?*Object {
+        const kwlist = [_:null][*c]const u8{};
+        py.parseTupleAndKeywords(args, kwargs, ":__call__", @ptrCast(&kwlist), .{}) catch return null;
+        if (self.atom) |atom| {
+            return @ptrCast(atom.newref());
+        }
+        return py.returnNone();
+    }
+
+    // Clear the atomref
+    pub fn release(atom: *Atom) void {
+        if (map.fetchSwapRemove(atom)) |entry| {
+            entry.value.atom = null;
+            atom.info.has_atomref = false;
+        }
+    }
+
+    pub fn __bool__(self: *Self) c_int {
+        return @intFromBool(self.atom != null);
+    }
+
+    pub fn dealloc(self: *Self) void {
+        if (self.atom) |atom| {
+            atom.info.has_atomref = false;
+            _ = map.swapRemove(atom);
+        }
+        self.typeref().free(@ptrCast(self));
+    }
+
+    const type_slots = [_]py.TypeSlot{
+        .{ .slot = py.c.Py_tp_new, .pfunc = @constCast(@ptrCast(&new)) },
+        .{ .slot = py.c.Py_tp_dealloc, .pfunc = @constCast(@ptrCast(&dealloc)) },
+        .{ .slot = py.c.Py_tp_call, .pfunc = @constCast(@ptrCast(&call)) },
+        .{ .slot = py.c.Py_nb_bool, .pfunc = @constCast(@ptrCast(&__bool__)) },
+        .{}, // sentinel
+    };
+
+    pub var TypeSpec = py.TypeSpec{
+        .name = package_name ++ ".AtomRef",
+        .basicsize = @sizeOf(Self),
+        .flags = py.c.Py_TPFLAGS_DEFAULT,
+        .slots = @constCast(@ptrCast(&type_slots)),
+    };
+
+    pub fn initType() !void {
+        if (TypeObject != null) return;
+        TypeObject = try py.Type.fromSpec(&TypeSpec);
+    }
+
+    pub fn deinitType() void {
+        py.clear(&TypeObject);
+    }
+};
 
 pub fn initModule(mod: *py.Module) !void {
     frozen_str = try py.Str.internFromString("--frozen");
@@ -412,12 +505,16 @@ pub fn initModule(mod: *py.Module) !void {
     try Atom.initType();
     errdefer Atom.deinitType();
 
+    try AtomRef.initType();
+    errdefer AtomRef.deinitType();
+
     // The metaclass generates subclasses
     try mod.addObjectRef("Atom", @ptrCast(Atom.TypeObject.?));
+    try mod.addObjectRef("atomref", @ptrCast(AtomRef.TypeObject.?));
 }
 
-pub fn deinitModule(mod: *py.Module) void {
+pub fn deinitModule(_: *py.Module) void {
     py.clear(&frozen_str);
     Atom.deinitType();
-    _ = mod; // TODO: Remove dead type
+    AtomRef.deinitType();
 }

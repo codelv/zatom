@@ -27,7 +27,6 @@ var slots_str: ?*Str = null;
 var weakref_str: ?*Str = null;
 const package_name = @import("api.zig").package_name;
 
-
 pub fn computeMemoryLayout(
     member: *MemberBase,
     info: *MetaInfo,
@@ -64,7 +63,6 @@ pub fn computeMemoryLayout(
         },
         .none => {}, // No-op
     }
-
 }
 
 pub const MetaInfo = packed struct {
@@ -156,7 +154,6 @@ pub const AtomMeta = extern struct {
                         try py.memoryError();
                     };
                 }
-
             }
         }
         if (!found_atom) {
@@ -179,7 +176,6 @@ pub const AtomMeta = extern struct {
                     computeMemoryLayout(member, &info);
                     try members.set(@ptrCast(attr), @ptrCast(member));
 
-
                     const member_default_str = try Str.format("_default_{s}", .{attr.data()});
                     defer member_default_str.decref();
                     if (dict.get(@ptrCast(member_default_str))) |func| {
@@ -189,7 +185,6 @@ pub const AtomMeta = extern struct {
                         }
                         // TODO: else should this throw an error
                     }
-
                 } else if (ObserveHandler.check(entry.value)) {
                     const observer: *ObserveHandler = @ptrCast(entry.value);
                     if (observer.func) |func| {
@@ -303,10 +298,6 @@ pub const AtomMeta = extern struct {
         const name: *Str = @ptrCast(args[0]);
         // TODO: Check if string is interned
         const member: *MemberBase = @ptrCast(args[1]);
-        if (member.owner != null) {
-            // TODO: Support owned and copy static observers
-            return py.typeErrorObject(null, "Cannot add a member owned by other Atom class", .{});
-        }
         self.setAttr(name, @ptrCast(member)) catch return null;
 
         if (self.atom_members) |members| {
@@ -372,7 +363,7 @@ pub const AtomMeta = extern struct {
                 if (try self.staticObserverPool()) |pool| {
                     const data = topic.data();
                     if (std.mem.indexOf(u8, data, ".")) |j| {
-                        std.debug.assert(j > 1 and j+1 < data.len);
+                        std.debug.assert(j > 1 and j + 1 < data.len);
                         const new_topic = try Str.fromSlice(data[0..j]);
                         defer new_topic.decref();
                         const target = members.get(@ptrCast(new_topic));
@@ -384,18 +375,13 @@ pub const AtomMeta = extern struct {
                         }
 
                         // The extended attr to observe
-                        const attr = try Str.fromSlice(data[j+1..]);
+                        const attr = try Str.fromSlice(data[j + 1 ..]);
                         defer attr.decref();
 
                         // Attempt to validate the attr at runtime
-                        switch(try MemberBase.checkTopic(@ptrCast(target.?), attr)) {
+                        switch (try MemberBase.checkTopic(@ptrCast(target.?), attr)) {
                             .no => {
-                                return py.attributeError("extended observe target '{s}' is invalid. Attribute '{s}' on member '{s}' of '{s}' is not a valid", .{
-                                    data,
-                                    attr.data(),
-                                    new_topic.data(),
-                                    self.typeName()
-                                });
+                                return py.attributeError("extended observe target '{s}' is invalid. Attribute '{s}' on member '{s}' of '{s}' is not a valid", .{ data, attr.data(), new_topic.data(), self.typeName() });
                             },
                             else => {}, // Can't tell
                         }
@@ -414,7 +400,6 @@ pub const AtomMeta = extern struct {
                     }
                 }
             }
-
         }
     }
 
@@ -473,7 +458,6 @@ pub const AtomMeta = extern struct {
             mgr.deinit(py.allocator);
             self.pool_manager = null;
         }
-        // py.clear(&self.atom_members);
         if (self.atom_members) |members| {
             for (members.items) |member| {
                 member.decref();

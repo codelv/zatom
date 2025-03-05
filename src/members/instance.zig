@@ -36,7 +36,7 @@ pub const InstanceMember = Member("Instance", 4, struct {
         self.validate_context = kind.newref();
         errdefer py.clear(&self.validate_context);
 
-        if (factory != null and !factory.?.isNone()) {
+        if (py.notNone(factory)) {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
@@ -141,7 +141,7 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
         self.validate_context = resolve_func.newref();
         errdefer py.clear(&self.validate_context);
 
-        if (factory != null and !factory.?.isNone()) {
+        if (py.notNone(factory)) {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
@@ -172,7 +172,7 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
                 break :blk py.None();
             };
             // Make a tuple of (args, kwargs) to call with the resolved type
-            self.default_context = @ptrCast(try Tuple.packNewrefs(.{partial_args, partial_kwargs}));
+            self.default_context = @ptrCast(try Tuple.packNewrefs(.{ partial_args, partial_kwargs }));
         } else {
             self.default_context = py.returnNone();
         }
@@ -208,10 +208,7 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
 
             const new_args = if (args.isNone()) try Tuple.packNewrefs(.{first_kind}) else try Tuple.prepend(@ptrCast(args), first_kind);
             defer new_args.decref();
-            py.xsetref(&self.default_context, try partial.?.call(
-                new_args,
-                if (kwargs.isNone()) null else @ptrCast(kwargs)
-            ));
+            py.xsetref(&self.default_context, try partial.?.call(new_args, if (kwargs.isNone()) null else @ptrCast(kwargs)));
         }
 
         // Replace the resolver with the kind
@@ -246,7 +243,6 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
         }
         return new.newref();
     }
-
 });
 
 pub const all_members = .{

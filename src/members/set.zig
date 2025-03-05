@@ -54,7 +54,7 @@ pub const TypedSet = extern struct {
         for (0..n) |i| {
             const item = args.getUnsafe(i).?;
             const value = self.validateIterable(item) catch return null;
-            new_args.setUnsafe(i+1, value);
+            new_args.setUnsafe(i + 1, value);
         }
         return set_update_method.?.call(new_args, null) catch null;
     }

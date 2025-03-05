@@ -112,6 +112,67 @@ pub const BytesMember = Member("Bytes", 13, struct {
     }
 });
 
+pub const ConstantMember = Member("Constant", 19, struct {
+    pub fn init(self: *MemberBase, args: *py.Tuple, kwargs: ?*py.Dict) !void {
+        const kwlist = [_:null][*c]const u8{
+            "default",
+            "factory",
+            "kind",
+        };
+        var default: ?*Object = null;
+        var kind: ?*Object = null;
+        var factory: ?*Object = null;
+
+        try py.parseTupleAndKeywords(args, kwargs, "|OOO", @ptrCast(&kwlist), .{ &default, &factory, &kind });
+        if (py.notNone(kind)) {
+            try self.validateTypeOrTupleOfTypes(kind.?);
+            self.validate_context = kind.?.newref();
+        }
+
+        if (py.notNone(factory)) {
+            if (!factory.?.isCallable()) {
+                return py.typeError("factory must be callable", .{});
+            }
+            self.info.default_mode = .func;
+            self.default_context = factory.?.newref();
+        } else if (default) |v| {
+            self.default_context = v.newref();
+        } else {
+            self.default_context = py.returnNone();
+        }
+    }
+
+    pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
+        if (self.validate_context) |context| {
+            if (!try new.isInstance(context)) {
+                if (py.Tuple.check(context)) {
+                    const types_str = try context.str();
+                    defer types_str.decref();
+                    try self.validateFail(atom, new, types_str.data());
+                } else {
+                    try self.validateFail(atom, new, py.Type.className(@ptrCast(context)));
+                }
+                unreachable;
+            }
+        }
+        return new.newref();
+    }
+
+    pub inline fn setattr(self: *MemberBase, atom: *Atom, _: *Object) py.Error!void {
+        try py.typeError("The value of a constant member '{s}' on the '{s}' object cannot be changed.", .{
+            self.name.?.data(),
+            atom.typeName(),
+        });
+    }
+
+    pub inline fn delattr(self: *MemberBase, atom: *Atom) py.Error!void {
+        try py.typeError("The value of a constant member '{s}' on the '{s}' object cannot be deleted.", .{
+            self.name.?.data(),
+            atom.typeName(),
+        });
+    }
+});
+
 pub const all_members = .{
     ValueMember,
     CallableMember,
@@ -120,11 +181,14 @@ pub const all_members = .{
     FloatMember,
     StrMember,
     BytesMember,
+    ConstantMember,
 };
 
 pub fn initModule(mod: *py.Module) !void {
     empty_str = try py.Str.internFromString("");
     errdefer py.clear(&empty_str);
+    empty_bytes = try py.Bytes.fromSlice("");
+    errdefer py.clear(&empty_bytes);
     inline for (all_members) |T| {
         try T.initType();
         errdefer T.deinitType();
@@ -132,11 +196,9 @@ pub fn initModule(mod: *py.Module) !void {
     }
 }
 
-pub fn deinitModule(mod: *py.Module) void {
-    _ = mod;
-    errdefer py.clear(&empty_str);
-    errdefer py.clear(&empty_bytes);
+pub fn deinitModule(_: *py.Module) void {
     inline for (all_members) |T| {
         T.deinitType();
     }
+    py.clearAll(.{ &empty_str, &empty_bytes });
 }

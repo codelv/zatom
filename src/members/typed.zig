@@ -167,7 +167,7 @@ pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
                 break :blk py.None();
             };
             // Make a tuple of (args, kwargs) to call with the resolved type
-            self.default_context = @ptrCast(try Tuple.packNewrefs(.{partial_args, partial_kwargs}));
+            self.default_context = @ptrCast(try Tuple.packNewrefs(.{ partial_args, partial_kwargs }));
         } else {
             self.default_context = py.returnNone();
         }
@@ -202,10 +202,7 @@ pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
             const kwargs = tuple.getUnsafe(1).?;
             const new_args = if (args.isNone()) try Tuple.packNewrefs(.{kind}) else try Tuple.prepend(@ptrCast(args), kind);
             defer new_args.decref();
-            py.xsetref(&self.default_context, try partial.?.call(
-                new_args,
-                if (kwargs.isNone()) null else @ptrCast(kwargs)
-            ));
+            py.xsetref(&self.default_context, try partial.?.call(new_args, if (kwargs.isNone()) null else @ptrCast(kwargs)));
         }
 
         // Replace the resolver with the kind
@@ -234,7 +231,6 @@ pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
         }
         return new.newref();
     }
-
 });
 
 pub const all_members = .{

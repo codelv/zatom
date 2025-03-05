@@ -1,4 +1,3 @@
-
 const py = @import("api.zig").py;
 const std = @import("std");
 const Object = py.Object;
@@ -44,13 +43,13 @@ pub const ObserveHandler = extern struct {
         for (0..n) |i| {
             const name: *Str = @ptrCast(args.getUnsafe(i).?);
             if (!name.typeCheckSelf()) {
-                return py.typeErrorObject(-1, "observe attribute name must be a string, got '{s}' instead", .{ name.typeName() });
+                return py.typeErrorObject(-1, "observe attribute name must be a string, got '{s}' instead", .{name.typeName()});
             }
 
             const data = name.data();
             if (std.mem.indexOf(u8, data, ".")) |j| {
-                if (j <= 1 or j+1 >= data.len or std.mem.count(u8, data, ".") > 1) {
-                    return py.typeErrorObject(-1, "cannot observe '{s}', only a single extension with non-empty values is supported", .{ data });
+                if (j <= 1 or j + 1 >= data.len or std.mem.count(u8, data, ".") > 1) {
+                    return py.typeErrorObject(-1, "cannot observe '{s}', only a single extension with non-empty values is supported", .{data});
                 }
             }
         }
@@ -152,7 +151,7 @@ pub const StaticObserver = extern struct {
         var change: *Dict = undefined;
         args.parseTyped(.{&change}) catch return null;
         const owner = change.getOrError(@ptrCast(object_str.?)) catch return null;
-        return self.func.?.callArgsUnchecked(.{owner, change});
+        return self.func.?.callArgsUnchecked(.{ owner, change });
     }
 
     pub fn __bool__(self: *Self) c_int {
@@ -169,12 +168,12 @@ pub const StaticObserver = extern struct {
     }
 
     pub fn clear(self: *Self) c_int {
-        py.clearAll(.{ &self.func });
+        py.clearAll(.{&self.func});
         return 0;
     }
 
     pub fn traverse(self: *Self, visit: py.visitproc, arg: ?*anyopaque) c_int {
-        return py.visitAll(.{ self.func }, visit, arg);
+        return py.visitAll(.{self.func}, visit, arg);
     }
 
     const type_slots = [_]py.TypeSlot{
@@ -223,7 +222,7 @@ pub const ExtendedObserver = extern struct {
     pub fn new(cls: *Type, args: *Tuple, _: ?*Dict) ?*Object {
         var _func: *Function = undefined;
         var _attr: *Str = undefined;
-        args.parseTyped(.{&_func, &_attr}) catch return null;
+        args.parseTyped(.{ &_func, &_attr }) catch return null;
         const self: *Self = @ptrCast(cls.genericNew(null, null) catch return null);
         self.func = _func.newref();
         self.attr = _attr.newref();
@@ -244,13 +243,12 @@ pub const ExtendedObserver = extern struct {
         const change_type = change.getOrError(@ptrCast(type_str.?)) catch return null;
         const owner = change.getOrError(@ptrCast(object_str.?)) catch return null;
 
-
         var oldowner: *Object = py.None();
         var newowner: *Object = py.None();
-//         var oldvalue: *Object = py.returnNone();
-//         defer oldvalue.decref();
-//         var newvalue: *Object = py.returnNone();
-//         defer newvalue.decref();
+        //         var oldvalue: *Object = py.returnNone();
+        //         defer oldvalue.decref();
+        //         var newvalue: *Object = py.returnNone();
+        //         defer newvalue.decref();
 
         if (change_type.is(create_str.?)) {
             newowner = change.getOrError(@ptrCast(value_str.?)) catch return null;
@@ -259,13 +257,10 @@ pub const ExtendedObserver = extern struct {
             newowner = change.getOrError(@ptrCast(value_str.?)) catch return null;
         } else if (change_type.is(delete_str.?)) {
             oldowner = change.getOrError(@ptrCast(value_str.?)) catch return null;
-//             if (Atom.check(owner)) {
-//                 const atom: *Atom = @ptrCast(owner);
-//             }
+            //             if (Atom.check(owner)) {
+            //                 const atom: *Atom = @ptrCast(owner);
+            //             }
         }
-
-
-
 
         if (Atom.check(oldowner) and self.meth != null) {
             const atom: *Atom = @ptrCast(oldowner);
@@ -281,8 +276,6 @@ pub const ExtendedObserver = extern struct {
                 newowner.typeName(),
             });
         }
-
-
 
         return py.returnNone();
     }
@@ -338,14 +331,12 @@ pub const ExtendedObserver = extern struct {
 
 const all_types = .{ ObserveHandler, StaticObserver, ExtendedObserver };
 
-const all_strings = .{
-    "change_types", "change", "create", "update", "delete", "oldvalue", "value", "object", "type"
-};
+const all_strings = .{ "change_types", "change", "create", "update", "delete", "oldvalue", "value", "object", "type" };
 
 pub fn initModule(mod: *py.Module) !void {
     inline for (all_strings) |str| {
         @field(@This(), str ++ "_str") = try Str.internFromString(str);
-        errdefer py.clear(@field(@This(), str ++ "_str"));
+        errdefer py.clear(&@field(@This(), str ++ "_str"));
     }
 
     inline for (all_types) |T| {
@@ -357,7 +348,6 @@ pub fn initModule(mod: *py.Module) !void {
     try mod.addObjectRef("ObserveHandler", @ptrCast(ObserveHandler.TypeObject.?));
     try mod.addObjectRef("ExtendedObserver", @ptrCast(ExtendedObserver.TypeObject.?));
     try mod.addObjectRef("StaticObserver", @ptrCast(StaticObserver.TypeObject.?));
-
 }
 
 pub fn deinitModule(_: *py.Module) void {
@@ -365,6 +355,6 @@ pub fn deinitModule(_: *py.Module) void {
         T.deinitType();
     }
     inline for (all_strings) |str| {
-        py.clear(@field(@This(), str ++ "_str"));
+        py.clear(&@field(@This(), str ++ "_str"));
     }
 }

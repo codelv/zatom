@@ -1,5 +1,6 @@
 import ast
-from zatom.api import Atom, Str, Int, Bool, Enum, List
+from zatom.api import Atom, Str, Int, Bool, Enum, List, add_member
+
 
 def test_atom_subclass():
     class A(Atom):
@@ -90,7 +91,37 @@ def test_multiple_subclass():
 
     class Pragma(ASTNode):
         command = Str()
-        #arguments = List(PragmaArg)
+        # arguments = List(PragmaArg)
         _fields = ("command", "arguments")
 
 
+def test_add_member_slot_storage():
+
+    class A(Atom):  # type: ignore
+        a = Int()
+
+    assert A.__slot_count__ == 1
+    b = Int()
+    add_member(A, "b", b)
+    assert A.__slot_count__ == 2
+    assert A.get_member("b") is b
+
+    a = A(a=1, b=2)
+    assert a.a == 1
+    assert a.b == 2
+
+
+def test_add_member_static_storage():
+
+    class A(Atom):  # type: ignore
+        a = Bool()
+
+    assert A.__slot_count__ == 1
+    b = Bool()
+    add_member(A, "b", b)
+    assert A.__slot_count__ == 1
+    assert A.get_member("b") is b
+
+    a = A(a=True, b=False)
+    assert a.a is True
+    assert a.b is False

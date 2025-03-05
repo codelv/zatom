@@ -30,7 +30,6 @@ const package_name = @import("api.zig").package_name;
 const MAX_BITSIZE = @bitSizeOf(usize);
 const MAX_OFFSET = @bitSizeOf(usize) - 1;
 
-
 pub const StorageMode = enum(u2) {
     pointer = 0, // Object pointer
     static = 1, // Takes a fixed width of a slot
@@ -38,8 +37,26 @@ pub const StorageMode = enum(u2) {
 };
 
 pub const Ownership = enum(u1) { stolen = 0, borrowed = 1 };
-pub const DefaultMode = enum(u2) { static = 0, func = 1, method = 2 };
+pub const DefaultMode = enum(u2) { static = 0, func = 1, method = 2, method_name = 3 };
 pub const Observable = enum(u2) { no = 0, yes = 1, maybe = 2 };
+
+// Enum
+const DefaultValue = enum(u8) {
+    NoOp = 0,
+    Static,
+    List,
+    Set,
+    Dict,
+    DefaultDict,
+    NonOptional,
+    Delegate,
+    CallObject,
+    CallObject_Object,
+    CallObject_ObjectName,
+    ObjectMethod,
+    ObjectMethod_Name,
+    MemberMethod_Object,
+};
 
 pub const MemberInfo = packed struct {
     index: u16 = 0,
@@ -267,6 +284,62 @@ pub const MemberBase = extern struct {
         return py.attributeErrorObject(null, "Member has no slot", .{});
     }
 
+    pub fn do_default_value(self: *Self, atom: *Atom) ?*Object {
+        @setEvalBranchQuota(10000);
+        inline for (all_modules) |mod| {
+            if (comptime @hasDecl(mod, "all_members")) {
+                inline for (mod.all_members) |M| {
+                    if (self.info.typeid == M.typeid) {
+                        return M.default(@ptrCast(self), atom) catch null;
+                    }
+                }
+            }
+        }
+        if (self.info.typeid == 0) {
+            return py.returnNone();
+        }
+        return py.systemErrorObject(null, "default cast failed: invalid member typeid {}", .{self.info.typeid});
+    }
+
+    pub fn set_default_value_mode(self: *Self, args: [*]*Object, n: isize) ?*Object {
+        if (n != 2 or !Int.check(args[0])) {
+            return py.typeErrorObject(null, "Invalid arguments: Signature is set_default_value_mode(mode: int, context: object)", .{});
+        }
+        const context = args[1];
+        const value = Int.as(@ptrCast(args[0]), u8) catch return null; // This does a range check
+        if (value > @as(u8, @intFromEnum(DefaultValue.MemberMethod_Object))) {
+            return py.typeErrorObject(null, "Invalid DefaultValue mode {}", .{value});
+        }
+        const mode: DefaultValue = @enumFromInt(value);
+        switch (mode) {
+            .CallObject => {
+                if (!context.isCallable()) {
+                    return py.typeErrorObject(null, "Context must be callable for mode {}", .{mode});
+                }
+                self.info.default_mode = .func;
+                py.xsetref(&self.default_context, context.newref());
+            },
+            .CallObject_Object => {
+                if (!context.isCallable()) {
+                    return py.typeErrorObject(null, "Context must be callable for mode {}", .{mode});
+                }
+                self.info.default_mode = .method;
+                py.xsetref(&self.default_context, context.newref());
+            },
+            .CallObject_ObjectName => {
+                if (!context.isCallable()) {
+                    return py.typeErrorObject(null, "Context must be callable for mode {}", .{mode});
+                }
+                self.info.default_mode = .method_name;
+                py.xsetref(&self.default_context, context.newref());
+            },
+            else => {
+                return py.typeErrorObject(null, "DefaultValue mode not yet supported {}", .{mode});
+            },
+        }
+        return py.returnNone();
+    }
+
     pub fn has_observers(self: *Self) ?*Object {
         if (self.staticObservers()) |pool| {
             return py.returnBool(pool.hasTopic(self.name.?) catch return null);
@@ -276,7 +349,7 @@ pub const MemberBase = extern struct {
 
     pub fn has_observer(self: *Self, args: [*]*Object, n: isize) ?*Object {
         const msg = "Invalid arguments. Signature is has_observer(observer: str | Callable, change_types: int = 0xff)";
-        var change_types: u8 = 0xff;
+        var change_types: u8 = @intFromEnum(ChangeType.ANY);
         if (n < 1 or n > 2) {
             return py.typeErrorObject(null, msg, .{});
         }
@@ -309,7 +382,7 @@ pub const MemberBase = extern struct {
                 }
                 break :blk Int.as(@ptrCast(v), u8) catch return null;
             }
-            break :blk @intFromEnum(ChangeType.any);
+            break :blk @intFromEnum(ChangeType.ANY);
         };
 
         if (self.staticAtomMeta()) |meta| {
@@ -339,9 +412,9 @@ pub const MemberBase = extern struct {
         }
         const atom: *Atom = @ptrCast(args[0]);
         if (n == 2) {
-            atom.notifyInternal(self.name.?, .{args[1]}, @intFromEnum(ChangeType.any)) catch return null;
+            atom.notifyInternal(self.name.?, .{args[1]}, @intFromEnum(ChangeType.ANY)) catch return null;
         } else {
-            atom.notifyInternal(self.name.?, .{}, @intFromEnum(ChangeType.any)) catch return null;
+            atom.notifyInternal(self.name.?, .{}, @intFromEnum(ChangeType.ANY)) catch return null;
         }
         return py.returnNone();
     }
@@ -384,7 +457,6 @@ pub const MemberBase = extern struct {
         } else {
             py.clear(&self.owner);
         }
-
     }
 
     pub inline fn validate(self: *Self, atom: *Atom, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
@@ -403,7 +475,7 @@ pub const MemberBase = extern struct {
         if (self.info.typeid == 0) {
             return newvalue.newref();
         }
-        try py.systemError("missing validator", .{});
+        try py.systemError("validate cast failed: invalid member typeid {}", .{self.info.typeid});
         unreachable;
     }
 
@@ -521,7 +593,7 @@ pub const MemberBase = extern struct {
             try change.set(@ptrCast(object_str.?), @ptrCast(atom));
             try change.set(@ptrCast(name_str.?), @ptrCast(self.name.?));
             try change.set(@ptrCast(value_str.?), newvalue);
-            return self.notifyChange(atom, change, .create);
+            return self.notifyChange(atom, change, .CREATE);
         }
     }
 
@@ -534,7 +606,7 @@ pub const MemberBase = extern struct {
             try change.set(@ptrCast(name_str.?), @ptrCast(self.name.?));
             try change.set(@ptrCast(oldvalue_str.?), oldvalue);
             try change.set(@ptrCast(value_str.?), newvalue);
-            return self.notifyChange(atom, change, .update);
+            return self.notifyChange(atom, change, .UPDATE);
         }
     }
 
@@ -546,7 +618,7 @@ pub const MemberBase = extern struct {
             try change.set(@ptrCast(object_str.?), @ptrCast(atom));
             try change.set(@ptrCast(name_str.?), @ptrCast(self.name.?));
             try change.set(@ptrCast(value_str.?), oldvalue);
-            return self.notifyChange(atom, change, .delete);
+            return self.notifyChange(atom, change, .DELETE);
         }
     }
 
@@ -591,16 +663,13 @@ pub const MemberBase = extern struct {
     }
 
     pub fn hasSameMemoryLayout(self: *Self, other: *Self) bool {
-        return (
-            self.info.storage_mode == other.info.storage_mode
-            and self.info.width == other.info.width
-        );
+        return (self.info.storage_mode == other.info.storage_mode and self.info.width == other.info.width);
     }
 
     // Generic implementation to generate the default value
     // The impl can override per mode as needed.
     // Returns new reference
-    pub inline fn default(self: *MemberBase, comptime impl: type, atom: *Atom) !*Object {
+    pub inline fn default(self: *MemberBase, comptime impl: type, atom: *Atom) py.Error!*Object {
         switch (self.info.default_mode) {
             .static => {
                 if (comptime @hasDecl(impl, "defaultStatic")) {
@@ -627,6 +696,16 @@ pub const MemberBase = extern struct {
                 }
                 if (self.default_context) |callable| {
                     return callable.callArgs(.{atom});
+                }
+                try py.systemError("default context missing", .{});
+                unreachable;
+            },
+            .method_name => {
+                if (comptime @hasDecl(impl, "defaultMethodName")) {
+                    return impl.defaultMethodName(self, atom);
+                }
+                if (self.default_context) |callable| {
+                    return callable.callArgs(.{ atom, self.name });
                 }
                 try py.systemError("default context missing", .{});
                 unreachable;
@@ -686,6 +765,8 @@ pub const MemberBase = extern struct {
         .{ .ml_name = "has_observer", .ml_meth = @constCast(@ptrCast(&has_observer)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Get whether or not the member already has the given observer." },
         .{ .ml_name = "add_static_observer", .ml_meth = @constCast(@ptrCast(&add_static_observer)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Add the name of a method to call on all atoms when the member changes." },
         .{ .ml_name = "remove_static_observer", .ml_meth = @constCast(@ptrCast(&remove_static_observer)), .ml_flags = py.c.METH_O, .ml_doc = "Remove the name of a method to call on all atoms when the member changes." },
+        .{ .ml_name = "do_default_value", .ml_meth = @constCast(@ptrCast(&do_default_value)), .ml_flags = py.c.METH_O, .ml_doc = "Retrieve the default value." },
+        .{ .ml_name = "set_default_value_mode", .ml_meth = @constCast(@ptrCast(&set_default_value_mode)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Set the default value mode." },
         .{ .ml_name = "tag", .ml_meth = @constCast(@ptrCast(&tag)), .ml_flags = py.c.METH_VARARGS | py.c.METH_KEYWORDS, .ml_doc = "Tag the member with metadata" },
         .{ .ml_name = "clone", .ml_meth = @constCast(@ptrCast(&clone)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Clone the member" },
         .{}, // sentinel
@@ -719,10 +800,8 @@ pub const MemberBase = extern struct {
     }
 };
 
-
 // Create a member subclass with the given mode
 pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: type) type {
-
     return extern struct {
         pub var TypeObject: ?*Type = null;
         pub const TypeName = type_name;
@@ -730,7 +809,6 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         pub const storage_mode: StorageMode = if (@hasDecl(impl, "storage_mode")) impl.storage_mode else .pointer;
         pub const typeid = id;
         const Self = @This();
-
 
         base: MemberBase,
 
@@ -757,7 +835,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         // Custom member api
         // --------------------------------------------------------------------------
         // Returns new reference
-        pub inline fn default(self: *Self, atom: *Atom) !*Object {
+        pub inline fn default(self: *Self, atom: *Atom) py.Error!*Object {
             if (comptime @hasDecl(impl, "default")) {
                 return impl.default(@ptrCast(self), atom);
             }
@@ -1062,13 +1140,12 @@ const all_modules = .{
     @import("members/tuple.zig"),
     @import("members/set.zig"),
     @import("members/event.zig"),
+    @import("members/coerced.zig"),
 };
 
 const all_strings = .{ "undefined", "type", "object", "name", "value", "oldvalue", "key", "create", "update", "delete", "item" };
 //
 //
-
-
 
 pub fn initModule(mod: *py.Module) !void {
     // Strings used to create the change dicts
@@ -1079,6 +1156,8 @@ pub fn initModule(mod: *py.Module) !void {
     try MemberBase.initType();
     errdefer MemberBase.deinitType();
     try mod.addObjectRef("Member", @ptrCast(MemberBase.TypeObject.?));
+
+    try mod.addObject("DefaultValue", try py.newIntEnum(DefaultValue));
 
     inline for (all_modules) |module| {
         try module.initModule(mod);

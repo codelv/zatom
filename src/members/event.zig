@@ -10,6 +10,7 @@ const Atom = @import("../atom.zig").Atom;
 const member = @import("../member.zig");
 const MemberBase = member.MemberBase;
 const StorageMode = member.StorageMode;
+const ChangeType = @import("../observer_pool.zig").ChangeType;
 const Member = member.Member;
 
 const InstanceMember = @import("instance.zig").InstanceMember;
@@ -66,7 +67,7 @@ pub const EventBinder = extern struct {
             py.typeError("Event callback must be callable", .{}) catch return null;
         }
         const topic = self.member.?.base.name.?;
-        self.atom.?.addDynamicObserver(topic, callback, 0xff) catch return null;
+        self.atom.?.addDynamicObserver(topic, callback, @intFromEnum(ChangeType.ANY)) catch return null;
         return py.returnNone();
     }
 
@@ -179,7 +180,7 @@ pub const EventMember = Member("Event", 3, struct {
             try change.set(@ptrCast(object_str.?), @ptrCast(atom));
             try change.set(@ptrCast(name_str.?), @ptrCast(self.name));
             try change.set(@ptrCast(value_str.?), value);
-            try self.notifyChange(atom, change, .event);
+            try self.notifyChange(atom, change, .EVENT);
         }
     }
 
@@ -196,7 +197,7 @@ pub fn initModule(mod: *py.Module) !void {
     // Strings used to create the event dict
     inline for (.{ "type", "event", "object", "name", "value" }) |str| {
         @field(@This(), str ++ "_str") = try Str.internFromString(str);
-        errdefer py.clear(@field(@This(), str ++ "_str"));
+        errdefer py.clear(&@field(@This(), str ++ "_str"));
     }
 
     try EventBinder.initType();
