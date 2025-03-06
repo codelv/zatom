@@ -120,6 +120,40 @@ pub const PropertyMember = Member("Property", 19, struct {
         return py.returnBool(self.base.info.storage_mode == .pointer);
     }
 
+    pub fn set_getter(self: *PropertyMember, func: *Object) ?*Object {
+        if (!func.isCallable()) {
+            return py.typeErrorObject(null, "Getter must be callable", .{});
+        }
+        const tuple: *Tuple = @ptrCast(self.base.validate_context.?);
+        tuple.set(0, func.newref()) catch return null;
+        return func.newref();
+    }
+
+    pub fn set_setter(self: *PropertyMember, func: *Object) ?*Object {
+        if (!func.isCallable()) {
+            return py.typeErrorObject(null, "Setter must be callable", .{});
+        }
+        const tuple: *Tuple = @ptrCast(self.base.validate_context.?);
+        tuple.set(1, func.newref()) catch return null;
+        return func.newref();
+    }
+
+    pub fn set_deleter(self: *PropertyMember, func: *Object) ?*Object {
+        if (!func.isCallable()) {
+            return py.typeErrorObject(null, "Deleter must be callable", .{});
+        }
+        const tuple: *Tuple = @ptrCast(self.base.validate_context.?);
+        tuple.set(2, func.newref()) catch return null;
+        return func.newref();
+    }
+
+    pub fn reset(self: *PropertyMember, owner: *Object) ?*Object {
+        if (self.base.info.storage_mode == .pointer) {
+            return self.base.del_slot(@ptrCast(owner));
+        }
+        return py.returnNone();
+    }
+
     const getset = [_]py.GetSetDef{
         .{ .name = "fget", .get = @ptrCast(&get_fget), .set = null, .doc = "Get the getter function for the property." },
         .{ .name = "fset", .get = @ptrCast(&get_fset), .set = null, .doc = "Get the setter function for the property." },
@@ -128,8 +162,17 @@ pub const PropertyMember = Member("Property", 19, struct {
         .{}, // sentinel
     };
 
+    const methods = [_]py.MethodDef{
+        .{ .ml_name = "getter", .ml_meth = @constCast(@ptrCast(&set_getter)), .ml_flags = py.c.METH_O, .ml_doc = "Use the given function as the property getter." },
+        .{ .ml_name = "setter", .ml_meth = @constCast(@ptrCast(&set_setter)), .ml_flags = py.c.METH_O, .ml_doc = "Use the given function as the property setter." },
+        .{ .ml_name = "deleter", .ml_meth = @constCast(@ptrCast(&set_deleter)), .ml_flags = py.c.METH_O, .ml_doc = "Use the given function as the property deleter." },
+        .{ .ml_name = "reset", .ml_meth = @constCast(@ptrCast(&reset)), .ml_flags = py.c.METH_O, .ml_doc = "Reset the cached value of the property. If not cached this is a no-op." },
+        .{}, // sentinel
+    };
+
     pub const type_slots = [_]py.TypeSlot{
         .{ .slot = py.c.Py_tp_getset, .pfunc = @constCast(@ptrCast(&getset)) },
+        .{ .slot = py.c.Py_tp_methods, .pfunc = @constCast(@ptrCast(&methods)) },
     };
 });
 

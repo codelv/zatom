@@ -2,6 +2,7 @@ import ast
 import pytest
 from zatom.api import Atom, Str, Value, Int, Bool, Enum, List, add_member, set_default
 
+
 def test_atom_missing_attr():
     class A(Atom):
         id = Int()
@@ -10,6 +11,7 @@ def test_atom_missing_attr():
     a = A()
     with pytest.raises(AttributeError):
         a.foo
+
 
 def test_atom_with_slots():
     class A(Atom):
@@ -22,6 +24,7 @@ def test_atom_with_slots():
     a.y = 2
     a.z = 3
     a.z = 4
+
 
 def test_atom_subclass():
     class A(Atom):

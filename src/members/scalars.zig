@@ -10,12 +10,26 @@ const Member = member.Member;
 
 var empty_str: ?*py.Str = null;
 var empty_bytes: ?*py.Bytes = null;
+var inf_str: ?*py.Str = null;
+var neg_inf_str: ?*py.Str = null;
 
 // Does no validation at all
 pub const ValueMember = Member("Value", 7, struct {
     pub const observable: Observable = .maybe;
     pub inline fn initDefault() !?*Object {
         return py.returnNone();
+    }
+
+    pub inline fn validate(self: *MemberBase, atom: *Atom, old: *Object, new: *Object) py.Error!*Object {
+        if (self.validate_context) |context| {
+            return switch (self.info.validate_mode) {
+                .default => new.newref(),
+                .call_old_new => try context.callArgs(.{ old, new }),
+                .call_object_old_new => try context.callArgs(.{ atom, old, new }),
+                .call_name_old_new => try context.callArgs(.{ self.name.?, old, new }),
+            };
+        }
+        return new.newref();
     }
 });
 
@@ -74,8 +88,7 @@ pub const FloatMember = Member("Float", 11, struct {
     pub inline fn coerce(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
         if (!py.Float.check(new)) {
             if (self.info.coerce and py.Int.check(new)) {
-                const value = try py.Int.as(@ptrCast(new), f64);
-                return @ptrCast(try py.Float.new(value));
+                return @ptrCast(try py.Float.fromInt(@ptrCast(new)));
             }
             try self.validateFail(atom, new, "float");
             unreachable;
@@ -173,6 +186,180 @@ pub const ConstantMember = Member("Constant", 19, struct {
     }
 });
 
+pub const RangeMember = Member("Range", 20, struct {
+    pub fn init(self: *MemberBase, args: *py.Tuple, kwargs: ?*py.Dict) !void {
+        const kwlist = [_:null][*c]const u8{
+            "low",
+            "high",
+            "value",
+        };
+        var low: ?*Object = null;
+        var high: ?*Object = null;
+        var value: ?*Object = null;
+        try py.parseTupleAndKeywords(args, kwargs, "|OOO", @ptrCast(&kwlist), .{ &low, &high, &value });
+
+        if (py.notNone(value) and !py.Int.check(value.?)) {
+            return py.typeError("value must be an int or None", .{});
+        }
+        if (py.notNone(low) and !py.Int.check(low.?)) {
+            return py.typeError("low must be an int or None", .{});
+        }
+        if (py.notNone(high) and !py.Int.check(high.?)) {
+            return py.typeError("low must be an int or None", .{});
+        }
+        if (py.notNone(low) and py.notNone(high)) {
+            if (try Object.compare(low.?, .gt, high.?)) {
+                const tmp = low.?;
+                low = high.?;
+                high = tmp;
+            }
+        }
+
+        self.validate_context = @ptrCast(try py.Tuple.packNewrefs(.{
+            low orelse py.None(),
+            high orelse py.None(),
+        }));
+
+        if (py.notNone(value)) {
+            self.default_context = @ptrCast(value.?.newref());
+        } else if (py.notNone(low)) {
+            self.default_context = low.?.newref();
+        } else if (py.notNone(high)) {
+            self.default_context = high.?.newref();
+        } else {
+            self.default_context = @ptrCast(try py.Int.new(0));
+        }
+    }
+
+    pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
+        if (!py.Int.check(new)) {
+            try self.validateFail(atom, new, "int");
+            unreachable;
+        }
+        const tuple: *py.Tuple = @ptrCast(self.validate_context.?);
+        const low = tuple.getUnsafe(0).?;
+        const high = tuple.getUnsafe(1).?;
+        if (!low.isNone() and try new.compare(.lt, low)) {
+            try py.valueError("range value for '{s}' of '{s}' is too small", .{
+                self.name.?.data(),
+                atom.typeName(),
+            });
+        }
+        if (!high.isNone() and try new.compare(.gt, high)) {
+            try py.valueError("range value for '{s}' of '{s}' is too large", .{
+                self.name.?.data(),
+                atom.typeName(),
+            });
+        }
+        return new.newref();
+    }
+});
+
+pub const FloatRangeMember = Member("FloatRange", 21, struct {
+    pub fn init(self: *MemberBase, args: *py.Tuple, kwargs: ?*py.Dict) !void {
+        const kwlist = [_:null][*c]const u8{
+            "low",
+            "high",
+            "value",
+            "strict",
+        };
+        var low: ?*Object = null;
+        var high: ?*Object = null;
+        var value: ?*Object = null;
+        var strict: bool = false;
+
+        try py.parseTupleAndKeywords(args, kwargs, "|OOOp", @ptrCast(&kwlist), .{ &low, &high, &value, &strict });
+
+        var low_value: *py.Float = blk: {
+            if (py.notNone(low)) {
+                if (py.Float.check(low.?)) {
+                    break :blk @ptrCast(low.?.newref());
+                } else if (!strict and py.Int.check(low.?)) {
+                    break :blk try py.Float.fromInt(@ptrCast(low.?));
+                } else {
+                    return py.typeError("low must be an float or None", .{});
+                }
+            } else {
+                break :blk try py.Float.fromString(neg_inf_str.?);
+            }
+        };
+        defer low_value.decref();
+
+        var high_value: *py.Float = blk: {
+            if (py.notNone(high)) {
+                if (py.Float.check(high.?)) {
+                    break :blk @ptrCast(high.?.newref());
+                } else if (!strict and py.Int.check(high.?)) {
+                    break :blk try py.Float.fromInt(@ptrCast(high.?));
+                } else {
+                    return py.typeError("high must be an float or None", .{});
+                }
+            } else {
+                break :blk try py.Float.fromString(inf_str.?);
+            }
+        };
+        defer high_value.decref();
+
+        if (py.notNone(low) and py.notNone(high)) {
+            if (try low_value.compare(.gt, @ptrCast(high_value))) {
+                const tmp = low_value;
+                low_value = high_value;
+                high_value = tmp;
+            }
+        }
+        self.info.coerce = !strict;
+        self.validate_context = @ptrCast(try py.Tuple.packNewrefs(.{ low_value, high_value }));
+        if (py.notNone(value)) {
+            if (py.Float.check(value.?)) {
+                self.default_context = value.?.newref();
+            } else if (!strict and py.Int.check(value.?)) {
+                self.default_context = @ptrCast(try py.Float.fromInt(@ptrCast(value.?)));
+            } else {
+                return py.typeError("value must be an float or None", .{});
+            }
+        } else if (py.notNone(low)) {
+            self.default_context = @ptrCast(low_value.newref());
+        } else if (py.notNone(high)) {
+            self.default_context = @ptrCast(high_value.newref());
+        } else {
+            self.default_context = @ptrCast(try py.Float.new(0.0));
+        }
+    }
+
+    pub inline fn coerce(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
+        const coerced: *Object = blk: {
+            if (!py.Float.check(new)) {
+                if (self.info.coerce and py.Int.check(new)) {
+                    break :blk @ptrCast(try py.Float.fromInt(@ptrCast(new)));
+                }
+                try self.validateFail(atom, new, "float");
+                unreachable;
+            }
+            break :blk new.newref();
+        };
+        errdefer coerced.decref(); // Only decref if va
+
+        const tuple: *py.Tuple = @ptrCast(self.validate_context.?);
+        const low = tuple.getUnsafe(0).?;
+        const high = tuple.getUnsafe(1).?;
+        if (try coerced.compare(.lt, low)) {
+            try py.valueError("range value for '{s}' of '{s}' is too small", .{
+                self.name.?.data(),
+                atom.typeName(),
+            });
+            unreachable;
+        }
+        if (try coerced.compare(.gt, high)) {
+            try py.valueError("range value for '{s}' of '{s}' is too large", .{
+                self.name.?.data(),
+                atom.typeName(),
+            });
+            unreachable;
+        }
+        return coerced;
+    }
+});
+
 pub const all_members = .{
     ValueMember,
     CallableMember,
@@ -182,6 +369,8 @@ pub const all_members = .{
     StrMember,
     BytesMember,
     ConstantMember,
+    RangeMember,
+    FloatRangeMember,
 };
 
 pub fn initModule(mod: *py.Module) !void {
@@ -189,6 +378,12 @@ pub fn initModule(mod: *py.Module) !void {
     errdefer py.clear(&empty_str);
     empty_bytes = try py.Bytes.fromSlice("");
     errdefer py.clear(&empty_bytes);
+
+    inf_str = try py.Str.internFromString("inf");
+    errdefer py.clear(&inf_str);
+    neg_inf_str = try py.Str.internFromString("-inf");
+    errdefer py.clear(&neg_inf_str);
+
     inline for (all_members) |T| {
         try T.initType();
         errdefer T.deinitType();
@@ -200,5 +395,5 @@ pub fn deinitModule(_: *py.Module) void {
     inline for (all_members) |T| {
         T.deinitType();
     }
-    py.clearAll(.{ &empty_str, &empty_bytes });
+    py.clearAll(.{ &empty_str, &empty_bytes, &inf_str, &neg_inf_str });
 }

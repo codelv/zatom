@@ -126,7 +126,7 @@ def test_setattr_bool(benchmark, atom):
 
 
 @pytest.mark.parametrize("atom", (catom, zatom))
-@pytest.mark.benchmark(group="coerced")
+@pytest.mark.benchmark(group="validate-coerced")
 def test_setattr_coerced(benchmark, atom):
     class Obj(atom.Atom):
         item = atom.Coerced(int, factory=lambda: 0)
@@ -136,6 +136,46 @@ def test_setattr_coerced(benchmark, atom):
 
     def run():
         p.item = "1"
+
+    benchmark.pedantic(run, rounds=10000, iterations=100)
+
+
+@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.benchmark(group="validate-range")
+def test_validate_range(benchmark, atom):
+    class Obj(atom.Atom):
+        item = atom.Range(low=0, high=10)
+
+    p = Obj()
+    i = 0
+    p.item = 0
+
+    def run():
+        nonlocal i
+        i += 1
+        if i == 9:
+            i = 0
+        p.item = i
+
+    benchmark.pedantic(run, rounds=10000, iterations=100)
+
+
+@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.benchmark(group="validate-range-float")
+def test_validate_range_float(benchmark, atom):
+    class Obj(atom.Atom):
+        item = atom.FloatRange(low=0, high=10)
+
+    p = Obj()
+    i = 0.0
+    p.item = 0
+
+    def run():
+        nonlocal i
+        i += 1.2
+        if i > 9:
+            i = 0
+        p.item = i
 
     benchmark.pedantic(run, rounds=10000, iterations=100)
 

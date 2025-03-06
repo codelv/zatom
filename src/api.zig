@@ -11,6 +11,7 @@ const atom_meta = @import("atom_meta.zig");
 const atom = @import("atom.zig");
 const observation = @import("observation.zig");
 const observer_pool = @import("observer_pool.zig");
+const modes = @import("modes.zig");
 pub const package_name = "zatom";
 
 fn modexec(mod: *py.Module) !c_int {
@@ -24,6 +25,8 @@ fn modexec(mod: *py.Module) !c_int {
     errdefer observation.deinitModule(mod);
     try observer_pool.initModule(mod);
     errdefer observer_pool.deinitModule(mod);
+    try modes.initModule(mod);
+    errdefer modes.deinitModule(mod);
     return 0;
 }
 

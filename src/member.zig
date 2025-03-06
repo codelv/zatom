@@ -26,6 +26,8 @@ const AtomMeta = @import("atom_meta.zig").AtomMeta;
 const ObserverPool = @import("observer_pool.zig").ObserverPool;
 const ChangeType = @import("observer_pool.zig").ChangeType;
 const package_name = @import("api.zig").package_name;
+const modes = @import("modes.zig");
+const ValueMember = @import("members/scalars.zig").ValueMember;
 
 const MAX_BITSIZE = @bitSizeOf(usize);
 const MAX_OFFSET = @bitSizeOf(usize) - 1;
@@ -38,25 +40,8 @@ pub const StorageMode = enum(u2) {
 
 pub const Ownership = enum(u1) { stolen = 0, borrowed = 1 };
 pub const DefaultMode = enum(u2) { static = 0, func = 1, method = 2, method_name = 3 };
+pub const ValidateMode = enum(u2) { default = 0, call_old_new = 1, call_name_old_new = 2, call_object_old_new = 3 };
 pub const Observable = enum(u2) { no = 0, yes = 1, maybe = 2 };
-
-// Enum
-const DefaultValue = enum(u8) {
-    NoOp = 0,
-    Static,
-    List,
-    Set,
-    Dict,
-    DefaultDict,
-    NonOptional,
-    Delegate,
-    CallObject,
-    CallObject_Object,
-    CallObject_ObjectName,
-    ObjectMethod,
-    ObjectMethod_Name,
-    MemberMethod_Object,
-};
 
 pub const MemberInfo = packed struct {
     index: u16 = 0,
@@ -64,12 +49,13 @@ pub const MemberInfo = packed struct {
     offset: u6 = 0, // starting bit position in slot
     storage_mode: StorageMode = .pointer,
     default_mode: DefaultMode = .static,
+    validate_mode: ValidateMode = .default,
     // It is up to the member whether these is used or not
     optional: bool = false,
     coerce: bool = false,
     resolved: bool = false,
     typeid: u5 = 0,
-    padding: u24 = 0,
+    padding: u22 = 0,
 };
 
 // Base Member class
@@ -307,10 +293,10 @@ pub const MemberBase = extern struct {
         }
         const context = args[1];
         const value = Int.as(@ptrCast(args[0]), u8) catch return null; // This does a range check
-        if (value > @as(u8, @intFromEnum(DefaultValue.MemberMethod_Object))) {
+        if (value > @as(u8, @intFromEnum(modes.DefaultValue.MemberMethod_Object))) {
             return py.typeErrorObject(null, "Invalid DefaultValue mode {}", .{value});
         }
-        const mode: DefaultValue = @enumFromInt(value);
+        const mode: modes.DefaultValue = @enumFromInt(value);
         switch (mode) {
             .CallObject => {
                 if (!context.isCallable()) {
@@ -344,6 +330,55 @@ pub const MemberBase = extern struct {
             },
             else => {
                 return py.typeErrorObject(null, "DefaultValue mode not yet supported {}", .{mode});
+            },
+        }
+        return py.returnNone();
+    }
+
+    pub fn set_validate_mode(self: *Self, args: [*]*Object, n: isize) ?*Object {
+        if (n != 2 or !Int.check(args[0])) {
+            return py.typeErrorObject(null, "Invalid arguments: Signature is set_validate_mode(mode: int, context: object)", .{});
+        }
+        const context = args[1];
+        const value = Int.as(@ptrCast(args[0]), u8) catch return null; // This does a range check
+        if (value > @as(u8, @intFromEnum(modes.Validate.MemberMethod_ObjectOldNew))) {
+            return py.typeErrorObject(null, "Invalid Validate mode {}", .{value});
+        }
+        if (!(self.isInstance(@ptrCast(ValueMember.TypeObject.?)) catch return null)) {
+            return py.typeErrorObject(null, "Validate mode can only be used on Value members. Use a dedicated member instead. Got '{s}'", .{self.typeName()});
+        }
+        const mode: modes.Validate = @enumFromInt(value);
+
+        switch (mode) {
+            .NoOp => {
+                self.info.validate_mode = .default;
+                py.xsetref(&self.validate_context, null);
+            },
+            .ObjectMethod_OldNew => {
+                if (!context.isCallable()) {
+                    return py.typeErrorObject(null, "Context must callable for mode {}. Got '{s}'", .{ mode, context.typeName() });
+                }
+                self.info.validate_mode = .call_old_new;
+                py.xsetref(&self.validate_context, context.newref());
+            },
+            .ObjectMethod_NameOldNew => {
+                if (!context.isCallable()) {
+                    return py.typeErrorObject(null, "Context must callable for mode {}. Got '{s}'", .{ mode, context.typeName() });
+                }
+                self.info.validate_mode = .call_name_old_new;
+                py.xsetref(&self.validate_context, context.newref());
+            },
+            .MemberMethod_ObjectOldNew => {
+                const member_method = self.getAttr(@ptrCast(context)) catch return null;
+                defer member_method.decref();
+                if (!py.Method.check(member_method)) {
+                    return py.typeErrorObject(null, "Context must the name of a member method for mode {}. Got '{s}'", .{ mode, context.typeName() });
+                }
+                self.info.validate_mode = .call_object_old_new;
+                py.xsetref(&self.validate_context, member_method.newref());
+            },
+            else => {
+                return py.typeErrorObject(null, "Validate mode not yet supported {}", .{mode});
             },
         }
         return py.returnNone();
@@ -776,6 +811,7 @@ pub const MemberBase = extern struct {
         .{ .ml_name = "remove_static_observer", .ml_meth = @constCast(@ptrCast(&remove_static_observer)), .ml_flags = py.c.METH_O, .ml_doc = "Remove the name of a method to call on all atoms when the member changes." },
         .{ .ml_name = "do_default_value", .ml_meth = @constCast(@ptrCast(&do_default_value)), .ml_flags = py.c.METH_O, .ml_doc = "Retrieve the default value." },
         .{ .ml_name = "set_default_value_mode", .ml_meth = @constCast(@ptrCast(&set_default_value_mode)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Set the default value mode." },
+        .{ .ml_name = "set_validate_mode", .ml_meth = @constCast(@ptrCast(&set_validate_mode)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Set the validate mode." },
         .{ .ml_name = "tag", .ml_meth = @constCast(@ptrCast(&tag)), .ml_flags = py.c.METH_VARARGS | py.c.METH_KEYWORDS, .ml_doc = "Tag the member with metadata" },
         .{ .ml_name = "clone", .ml_meth = @constCast(@ptrCast(&clone)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Clone the member" },
     };
@@ -1165,8 +1201,6 @@ pub fn initModule(mod: *py.Module) !void {
     try MemberBase.initType();
     errdefer MemberBase.deinitType();
     try mod.addObjectRef("Member", @ptrCast(MemberBase.TypeObject.?));
-
-    try mod.addObject("DefaultValue", try py.newIntEnum(DefaultValue));
 
     inline for (all_modules) |module| {
         try module.initModule(mod);

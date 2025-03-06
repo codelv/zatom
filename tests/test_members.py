@@ -11,6 +11,7 @@ from zatom.api import (
     Enum,
     Event,
     Float,
+    FloatRange,
     List,
     TypedList,
     TypedSet,
@@ -19,6 +20,7 @@ from zatom.api import (
     Int,
     Member,
     Property,
+    Range,
     Str,
     Set,
     Tuple,
@@ -310,8 +312,7 @@ def test_enum():
     class A(Atom):
         option = Enum(1, 2, 3, 4, 5, default=3)
         alt = Enum("one", "two")
-        other_alt = alt("two") # Calling an enum creates a copy with a new default
-
+        other_alt = alt("two")  # Calling an enum creates a copy with a new default
 
     assert A.option.index == 0
     assert A.option.offset == 0
@@ -487,15 +488,20 @@ def test_dict():
     with pytest.raises(TypeError):
         a.c = {1: 2}
 
+
 def test_property():
     class A(Atom):
         __slots__ = ("_x", "_y")
+
         def _get_x(self):
             return self._x
+
         def _set_x(self, v):
             self._x = v
+
         def _del_x(self):
             del self._x
+
         x = Property()
         y = Property(lambda self: self._y)
 
@@ -512,6 +518,68 @@ def test_property():
     assert a._x == 2
     assert a.x == 2
     del a.x
-    assert not hasattr(a, '_x')
+    assert not hasattr(a, "_x")
     a.x = 1
     assert a.x == 1
+
+
+def test_range():
+    class A(Atom):
+        x = Range(low=1)
+        y = Range(high=10)
+        z = Range(value=2)
+        a = Range()
+
+    a = A()
+    assert a.x == 1
+    assert a.y == 10
+    assert a.z == 2
+    assert a.a == 0
+    with pytest.raises(TypeError):
+        a.x = "1"
+    with pytest.raises(TypeError):
+        a.a = 1.0
+
+    a.x = 2
+    with pytest.raises(ValueError):
+        a.x = 0
+    assert a.x == 2
+
+    a.y = 9
+    with pytest.raises(ValueError):
+        a.y = 11
+    assert a.y == 9
+
+    a.z = 12
+    assert a.z == 12
+
+
+def test_float_range():
+    class A(Atom):
+        x = FloatRange(low=1)
+        y = FloatRange(high=10.0, strict=True)
+        z = FloatRange(value=2)
+        a = FloatRange()
+
+    a = A()
+    assert a.x == 1
+    assert a.y == 10.0
+    assert a.z == 2
+    assert a.a == 0
+    with pytest.raises(TypeError):
+        a.x = "1"
+
+    a.x = 2
+    with pytest.raises(ValueError):
+        a.x = 0
+    assert a.x == 2
+
+    a.y = 9.0
+    with pytest.raises(ValueError):
+        a.y = 11.0
+    assert a.y == 9.0
+    with pytest.raises(TypeError):
+        a.y = 8  # strict
+
+    a.z = 12
+    assert a.z == 12
