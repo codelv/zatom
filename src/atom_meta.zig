@@ -27,6 +27,14 @@ var slots_str: ?*Str = null;
 var weakref_str: ?*Str = null;
 const package_name = @import("api.zig").package_name;
 
+pub fn calculateTypeSize(info: MetaInfo) usize {
+    // The size depends on the number of slots needed
+    // as well as the additional __slots__ added
+    // TODO: Check with __weakref__ and __dict__ or are these included in slots?
+    const total_slots = info.slot_count -| 1 + info.py_slots;
+    return @sizeOf(Atom) + total_slots * @sizeOf(*Object);
+}
+
 pub fn computeMemoryLayout(
     member: *MemberBase,
     info: *MetaInfo,
@@ -58,19 +66,48 @@ pub fn computeMemoryLayout(
                 // Reuse the space from the last static slot
                 member.info.index = @intCast(info.last_static_slot);
                 member.info.offset = @intCast(info.slot_offset);
-                info.slot_offset += @truncate(bitsize);
+                info.slot_offset +|= @truncate(bitsize);
             }
         },
         .none => {}, // No-op
     }
 }
 
+const UpdateAction = enum { reset, restore };
+
+inline fn updateAtomBasesTypeSizes(bases: *Tuple, reset_size: usize, comptime action: UpdateAction) void {
+    const num_bases: usize = @intCast(bases.sizeUnchecked());
+    for (0..num_bases) |i| {
+        const base = bases.getUnsafe(i).?;
+        if (AtomMeta.check(base)) {
+            const m: *AtomMeta = @ptrCast(base);
+            const mro: *Tuple = @ptrCast(m.base.impl.ht_type.tp_mro);
+            const mro_size: usize = @intCast(mro.sizeUnchecked());
+            for (0..mro_size) |j| {
+                const t = mro.getUnsafe(j).?;
+                if (AtomMeta.check(t)) {
+                    switch (action) {
+                        .reset => AtomMeta.setTypeSize(@ptrCast(t), reset_size),
+                        .restore => AtomMeta.updateTypeSize(@ptrCast(t)),
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Info needed to compute the memory layout
 pub const MetaInfo = packed struct {
+    // Number of members
     slot_count: u16 = 0,
-    has_static_slot: bool = false,
+    // Static storage
     last_static_slot: u16 = 0,
+    has_static_slot: bool = false,
+    // Current bit position within the last static slot
     slot_offset: u5 = 0,
-    reserved: u26 = 0,
+    // Number of python __slots__
+    py_slots: u16 = 0,
+    reserved: u10 = 0,
 };
 
 // A metaclass
@@ -118,17 +155,6 @@ pub const AtomMeta = extern struct {
             try py.typeError("AtomMeta's 3rd arg must be a dict", .{});
         }
 
-        if (dict.get(@ptrCast(slots_str.?)) == null) {
-            // Add __slots__ if not defined
-            const slots =
-                if (enable_weakrefs)
-                try Tuple.packNewrefs(.{weakref_str.?})
-            else
-                try Tuple.new(0);
-            defer slots.decref();
-            try dict.set(@ptrCast(slots_str.?), @ptrCast(slots));
-        }
-
         // Modify the bases
         const num_bases = try bases.size();
         if (num_bases == 0) {
@@ -145,8 +171,10 @@ pub const AtomMeta = extern struct {
         var found_atom: bool = false;
         for (0..num_bases) |i| {
             const base = bases.getUnsafe(i).?;
-            const is_atom_subclass = try base.isSubclass(@ptrCast(Atom.TypeObject.?));
-            if (is_atom_subclass) {
+            if (!Type.check(base)) {
+                try py.typeError("bases tuple must only contain types", .{});
+            }
+            if (AtomMeta.check(base)) {
                 found_atom = true;
                 const atom_base: *AtomMeta = @ptrCast(base);
                 if (atom_base.atom_members) |array| {
@@ -159,9 +187,27 @@ pub const AtomMeta = extern struct {
         if (!found_atom) {
             try py.typeError("AtomMeta must contain Atom or a subclass", .{});
         }
-
         // Gather members from the class
         var info = MetaInfo{};
+
+        if (dict.get(@ptrCast(slots_str.?))) |slots| {
+            if (Tuple.check(slots)) {
+                info.py_slots = @intCast(Tuple.sizeUnchecked(@ptrCast(slots)));
+            } else {
+                info.py_slots = 1;
+            }
+        } else {
+            // Add __slots__ if not defined
+            const slots =
+                if (enable_weakrefs)
+                try Tuple.packNewrefs(.{weakref_str.?})
+            else
+                try Tuple.new(0);
+            defer slots.decref();
+            info.py_slots = @intCast(slots.sizeUnchecked());
+            try dict.set(@ptrCast(slots_str.?), @ptrCast(slots));
+        }
+
         {
             var pos: isize = 0;
             while (dict.next(&pos)) |entry| {
@@ -193,6 +239,24 @@ pub const AtomMeta = extern struct {
                         // It's safe to modify the value of dict while iterating
                         try dict.set(@ptrCast(attr), @ptrCast(func));
                     }
+                } else if (DefaultSetter.check(entry.value)) {
+                    const set_default: *DefaultSetter = @ptrCast(entry.value);
+                    var found = false;
+                    for (inherited_members.items) |member| {
+                        if (attr.is(member.name)) {
+                            found = true;
+                            const new_member: *MemberBase = @ptrCast(try member.cloneOrError());
+                            defer new_member.decref();
+                            new_member.info.default_mode = .static;
+                            py.xsetref(&new_member.default_context, set_default.value.?.newref());
+                            computeMemoryLayout(new_member, &info);
+                            try dict.set(@ptrCast(attr), @ptrCast(new_member));
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        try py.typeError("Invalid call to set_default(). '{s}' is not an inherited member on the '{s}' class", .{ attr.data(), name.data() });
+                    }
                 }
 
                 // TODO: Look for un
@@ -216,6 +280,16 @@ pub const AtomMeta = extern struct {
             // so temporarily swap it back to the default
             AtomMeta.disableNew();
             defer AtomMeta.enableNew();
+
+            // Workaround to avoid multiple-bases have instance lay-out conflict
+            // Revert any Atom subclasses back to the base size then restore it
+            if (num_bases > 1) {
+                updateAtomBasesTypeSizes(bases, @sizeOf(Atom), .reset);
+            }
+
+            defer if (num_bases > 1) {
+                updateAtomBasesTypeSizes(bases, @sizeOf(Atom), .restore);
+            };
             break :blk @ptrCast(try Type.new(TypeObject.?, name, bases, dict));
         };
         errdefer cls.decref();
@@ -336,13 +410,13 @@ pub const AtomMeta = extern struct {
     // --------------------------------------------------------------------------
     // Internal api
     // --------------------------------------------------------------------------
-    pub fn updateTypeSize(self: *Self) void {
-        if (self.info.slot_count > 1) {
-            const extra_slots = self.info.slot_count - 1;
-            self.base.impl.ht_type.tp_basicsize = @intCast(@sizeOf(Atom) + extra_slots * @sizeOf(*Object));
-        } else {
-            self.base.impl.ht_type.tp_basicsize = @intCast(@sizeOf(Atom));
-        }
+    fn setTypeSize(self: *Self, size: usize) void {
+        std.debug.assert(size >= @sizeOf(Atom) and size < std.math.maxInt(isize));
+        self.base.impl.ht_type.tp_basicsize = @intCast(size);
+    }
+
+    fn updateTypeSize(self: *Self) void {
+        self.setTypeSize(calculateTypeSize(self.info));
     }
 
     pub fn initStaticObservers(self: *Self, observers: *List, members: *Dict) !void {
@@ -542,6 +616,72 @@ pub const AtomMeta = extern struct {
     }
 };
 
+const DefaultSetter = extern struct {
+    const Self = @This();
+    // Reference to the type. This is set in ready
+    pub var TypeObject: ?*Type = null;
+    base: Object,
+    value: ?*Object,
+
+    pub usingnamespace py.ObjectProtocol(Self);
+
+    // Type check the given object. This assumes the module was initialized
+    pub fn check(obj: *const Object) bool {
+        return obj.typeCheck(TypeObject.?);
+    }
+
+    // --------------------------------------------------------------------------
+    // Type definition
+    // --------------------------------------------------------------------------
+    pub fn new(cls: *Type, args: *Tuple, kwargs: ?*Dict) ?*Object {
+        const kwlist = [_:null][*c]const u8{"value"};
+        var v: *Object = undefined;
+        py.parseTupleAndKeywords(args, kwargs, "O", @ptrCast(&kwlist), .{&v}) catch return null;
+        const self: *Self = @ptrCast(Type.genericNew(cls, null, null) catch return null);
+        self.value = v.newref();
+        return @ptrCast(self);
+    }
+
+    pub fn dealloc(self: *Self) void {
+        self.gcUntrack();
+        _ = self.clear();
+        self.typeref().free(@ptrCast(self));
+    }
+
+    pub fn clear(self: *Self) c_int {
+        py.clearAll(.{&self.value});
+        return 0;
+    }
+
+    pub fn traverse(self: *Self, visit: py.visitproc, arg: ?*anyopaque) c_int {
+        return py.visitAll(.{self.value}, visit, arg);
+    }
+
+    const type_slots = [_]py.TypeSlot{
+        .{ .slot = py.c.Py_tp_new, .pfunc = @constCast(@ptrCast(&new)) },
+        .{ .slot = py.c.Py_tp_dealloc, .pfunc = @constCast(@ptrCast(&dealloc)) },
+        .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
+        .{ .slot = py.c.Py_tp_clear, .pfunc = @constCast(@ptrCast(&clear)) },
+        .{}, // sentinel
+    };
+
+    pub var TypeSpec = py.TypeSpec{
+        .name = package_name ++ ".DefaultSetter",
+        .basicsize = @sizeOf(Self),
+        .flags = (py.c.Py_TPFLAGS_DEFAULT | py.c.Py_TPFLAGS_HAVE_GC),
+        .slots = @constCast(@ptrCast(&type_slots)),
+    };
+
+    pub fn initType() !void {
+        if (TypeObject != null) return;
+        TypeObject = try py.Type.fromSpec(&TypeSpec);
+    }
+
+    pub fn deinitType() void {
+        py.clear(&TypeObject);
+    }
+};
+
 pub fn initModule(mod: *py.Module) !void {
     atom_members_str = try py.Str.internFromString("__atom_members__");
     errdefer py.clear(&atom_members_str);
@@ -549,6 +689,10 @@ pub fn initModule(mod: *py.Module) !void {
     errdefer py.clear(&slots_str);
     weakref_str = try Str.internFromString("__weakref__");
     errdefer py.clear(&weakref_str);
+
+    try DefaultSetter.initType();
+    errdefer DefaultSetter.deinitType();
+    try mod.addObject("set_default", @ptrCast(DefaultSetter.TypeObject.?));
 
     try AtomMeta.initType();
     errdefer AtomMeta.deinitType();

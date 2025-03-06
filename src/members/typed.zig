@@ -19,7 +19,7 @@ pub const TypedMember = Member("Typed", 16, struct {
 
     // Typed takes a single argument kind which is passed to an Typed member
     // Must initalize the validate_context to an TypedMember
-    pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
+    pub inline fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
         const kwlist = [_:null][*c]const u8{
             "kind",
             "args",
@@ -116,7 +116,7 @@ pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
 
     // Typed takes a single argument kind which is passed to an Typed member
     // Must initalize the validate_context to an TypedMember
-    pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
+    pub inline fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
         const kwlist = [_:null][*c]const u8{
             "resolve",
             "args",

@@ -1,6 +1,27 @@
 import ast
-from zatom.api import Atom, Str, Int, Bool, Enum, List, add_member
+import pytest
+from zatom.api import Atom, Str, Value, Int, Bool, Enum, List, add_member, set_default
 
+def test_atom_missing_attr():
+    class A(Atom):
+        id = Int()
+        ok = Bool()
+
+    a = A()
+    with pytest.raises(AttributeError):
+        a.foo
+
+def test_atom_with_slots():
+    class A(Atom):
+        __slots__ = ("x", "y")
+        z = Int()
+        a = Int()
+
+    a = A()
+    a.x = 1
+    a.y = 2
+    a.z = 3
+    a.z = 4
 
 def test_atom_subclass():
     class A(Atom):
@@ -77,22 +98,23 @@ def test_atom_subclass_increase_slots():
 
 
 def test_multiple_subclass():
-    bases = (Atom,)
+    class Obj(Atom):
+        id = Int()
 
-    class ASTNode(*bases):  # type: ignore
-        lineno = Int(-1)
-        col_offset = Int(-1)
-        end_lineno = Int(-1)
-        end_col_offset = Int(-1)
+    class Decl(Obj):
+        activated = Bool()
 
-    class PragmaArg(Atom):
-        kind = Enum("token", "number", "string")
-        value = Str()
+    class Widget(Decl):
+        widget = Value()
 
-    class Pragma(ASTNode):
-        command = Str()
-        # arguments = List(PragmaArg)
-        _fields = ("command", "arguments")
+    class Stylable(Decl):
+        style = Str()
+
+    print(Widget.__mro__)
+    print(Stylable.__mro__)
+
+    class StylableWidget(Widget, Stylable):
+        pass
 
 
 def test_add_member_slot_storage():
@@ -125,3 +147,17 @@ def test_add_member_static_storage():
     a = A(a=True, b=False)
     assert a.a is True
     assert a.b is False
+
+
+def test_set_default():
+
+    class A(Atom):  # type: ignore
+        name = Str("A")
+
+    class B(A):
+        name = set_default("B")
+
+    a = A()
+    assert a.name == "A"
+    b = B()
+    assert b.name == "B"

@@ -18,7 +18,7 @@ var partial: ?*Object = null;
 pub const InstanceMember = Member("Instance", 4, struct {
     // Instance takes a single argument kind which is passed to an Instance member
     // Must initalize the validate_context to an InstanceMember
-    pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
+    pub inline fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
         const kwlist = [_:null][*c]const u8{
             "kind",
             "args",
@@ -121,7 +121,7 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
 
     // Typed takes a single argument kind which is passed to an Instance member
     // Must initalize the validate_context to an TypedMember
-    pub fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
+    pub inline fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
         const kwlist = [_:null][*c]const u8{
             "resolve",
             "args",

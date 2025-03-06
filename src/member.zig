@@ -333,6 +333,15 @@ pub const MemberBase = extern struct {
                 self.info.default_mode = .method_name;
                 py.xsetref(&self.default_context, context.newref());
             },
+            .MemberMethod_Object => {
+                const member_method = self.getAttr(@ptrCast(context)) catch return null;
+                defer member_method.decref();
+                if (!py.Method.check(member_method)) {
+                    return py.typeErrorObject(null, "Context must the name of a member method for mode {}. Got '{s}'", .{ mode, context.typeName() });
+                }
+                self.info.default_mode = .method;
+                py.xsetref(&self.default_context, member_method.newref());
+            },
             else => {
                 return py.typeErrorObject(null, "DefaultValue mode not yet supported {}", .{mode});
             },
@@ -403,7 +412,7 @@ pub const MemberBase = extern struct {
     }
 
     pub fn clone(self: *Self) ?*Object {
-        return self.cloneOrError() catch return null;
+        return @ptrCast(self.cloneOrError() catch null);
     }
 
     pub fn notify(self: *Self, args: [*]*Object, n: isize) ?*Object {
@@ -622,7 +631,7 @@ pub const MemberBase = extern struct {
         }
     }
 
-    pub fn cloneOrError(self: *Self) !*Object {
+    pub fn cloneOrError(self: *Self) !*Self {
         const result: *Self = @ptrCast(try self.typeref().genericNew(null, null));
         errdefer result.decref();
         result.info = self.info;
@@ -756,7 +765,7 @@ pub const MemberBase = extern struct {
         .{}, // sentinel
     };
 
-    const methods = [_]py.MethodDef{
+    const methods = [_:py.MethodDef{}]py.MethodDef{
         .{ .ml_name = "get_slot", .ml_meth = @constCast(@ptrCast(&get_slot)), .ml_flags = py.c.METH_O, .ml_doc = "Get slot value directly" },
         .{ .ml_name = "set_slot", .ml_meth = @constCast(@ptrCast(&set_slot)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Set slot value directly" },
         .{ .ml_name = "del_slot", .ml_meth = @constCast(@ptrCast(&del_slot)), .ml_flags = py.c.METH_O, .ml_doc = "Del slot value directly" },
@@ -769,10 +778,9 @@ pub const MemberBase = extern struct {
         .{ .ml_name = "set_default_value_mode", .ml_meth = @constCast(@ptrCast(&set_default_value_mode)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Set the default value mode." },
         .{ .ml_name = "tag", .ml_meth = @constCast(@ptrCast(&tag)), .ml_flags = py.c.METH_VARARGS | py.c.METH_KEYWORDS, .ml_doc = "Tag the member with metadata" },
         .{ .ml_name = "clone", .ml_meth = @constCast(@ptrCast(&clone)), .ml_flags = py.c.METH_NOARGS, .ml_doc = "Clone the member" },
-        .{}, // sentinel
     };
 
-    const type_slots = [_]py.TypeSlot{
+    const type_slots = [_:py.TypeSlot{}]py.TypeSlot{
         .{ .slot = py.c.Py_tp_new, .pfunc = @constCast(@ptrCast(&new)) },
         .{ .slot = py.c.Py_tp_dealloc, .pfunc = @constCast(@ptrCast(&dealloc)) },
         .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
@@ -781,7 +789,6 @@ pub const MemberBase = extern struct {
         .{ .slot = py.c.Py_tp_getset, .pfunc = @constCast(@ptrCast(&getset)) },
         //.{ .slot = py.c.Py_tp_descr_get, .pfunc = @constCast(@ptrCast(&__get__)) },
         //.{ .slot = py.c.Py_tp_descr_set, .pfunc = @constCast(@ptrCast(&__set__)) },
-        .{}, // sentinel
     };
     pub var TypeSpec = py.TypeSpec{
         .name = package_name ++ ".Member",
@@ -1105,13 +1112,14 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
             return 0;
         }
 
+        const extra_type_slots = if (@hasDecl(impl, "type_slots")) impl.type_slots else [_]py.TypeSlot{};
         const type_slots = [_]py.TypeSlot{
             .{ .slot = py.c.Py_tp_new, .pfunc = @constCast(@ptrCast(&new)) },
             .{ .slot = py.c.Py_tp_init, .pfunc = @constCast(@ptrCast(&init)) },
             .{ .slot = py.c.Py_tp_descr_get, .pfunc = @constCast(@ptrCast(&__get__)) },
             .{ .slot = py.c.Py_tp_descr_set, .pfunc = @constCast(@ptrCast(&__set__)) },
-            .{}, // sentinel
-        };
+        } ++ extra_type_slots ++ [_]py.TypeSlot{.{}};
+
         pub var TypeSpec = py.TypeSpec{
             .name = package_name ++ "." ++ TypeName,
             .basicsize = @sizeOf(Self),
@@ -1141,6 +1149,7 @@ const all_modules = .{
     @import("members/set.zig"),
     @import("members/event.zig"),
     @import("members/coerced.zig"),
+    @import("members/property.zig"),
 };
 
 const all_strings = .{ "undefined", "type", "object", "name", "value", "oldvalue", "key", "create", "update", "delete", "item" };

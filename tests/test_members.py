@@ -18,6 +18,7 @@ from zatom.api import (
     ForwardInstance,
     Int,
     Member,
+    Property,
     Str,
     Set,
     Tuple,
@@ -309,6 +310,8 @@ def test_enum():
     class A(Atom):
         option = Enum(1, 2, 3, 4, 5, default=3)
         alt = Enum("one", "two")
+        other_alt = alt("two") # Calling an enum creates a copy with a new default
+
 
     assert A.option.index == 0
     assert A.option.offset == 0
@@ -322,6 +325,7 @@ def test_enum():
     a.option = 2
     assert a.option == 2
     assert a.alt == "one"
+    assert a.other_alt == "two"
     A.alt.get_slot(a) == 0
     a.alt = "two"
     A.alt.get_slot(a) == 1
@@ -330,6 +334,9 @@ def test_enum():
 
     with pytest.raises(ValueError):
         a.option = 6
+
+    with pytest.raises(TypeError):
+        A.alt("three")
 
 
 def test_event():
@@ -479,3 +486,32 @@ def test_dict():
 
     with pytest.raises(TypeError):
         a.c = {1: 2}
+
+def test_property():
+    class A(Atom):
+        __slots__ = ("_x", "_y")
+        def _get_x(self):
+            return self._x
+        def _set_x(self, v):
+            self._x = v
+        def _del_x(self):
+            del self._x
+        x = Property()
+        y = Property(lambda self: self._y)
+
+    assert not A.x.cached
+    assert not A.y.cached
+    a = A()
+    a._x = 1
+    assert a._x == 1
+    a._y = 2
+    assert a._y == 2
+    assert a.y == 2
+    assert a.x == 1
+    a.x = 2
+    assert a._x == 2
+    assert a.x == 2
+    del a.x
+    assert not hasattr(a, '_x')
+    a.x = 1
+    assert a.x == 1

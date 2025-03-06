@@ -68,6 +68,34 @@ pub const EnumMember = Member("Enum", 2, struct {
         }
         return new.newref();
     }
+
+    pub fn call(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) ?*Object {
+        const kwlist = [_:null][*c]const u8{"item"};
+        var new_default: *Object = undefined;
+        py.parseTupleAndKeywords(args, kwargs, "O:__call__", @ptrCast(&kwlist), .{&new_default}) catch return null;
+        const items: *Tuple = @ptrCast(self.validate_context.?);
+        if (!(items.contains(new_default) catch return null)) {
+            return py.typeErrorObject(null, "invalid enum value", .{});
+        }
+        const clone = self.cloneOrError() catch return null;
+        clone.info.default_mode = .static;
+        py.xsetref(&clone.default_context, new_default.newref());
+        return @ptrCast(clone);
+    }
+
+    pub fn get_items(self: *EnumMember) ?*Object {
+        return self.base.validate_context.?.newref();
+    }
+
+    const getset = [_]py.GetSetDef{
+        .{ .name = "items", .get = @ptrCast(&get_items), .set = null, .doc = "Enum items" },
+        .{}, // sentinel
+    };
+
+    pub const type_slots = [_]py.TypeSlot{
+        .{ .slot = py.c.Py_tp_call, .pfunc = @constCast(@ptrCast(&call)) },
+        .{ .slot = py.c.Py_tp_getset, .pfunc = @constCast(@ptrCast(&getset)) },
+    };
 });
 
 pub const all_members = .{
