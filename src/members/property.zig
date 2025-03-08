@@ -21,7 +21,7 @@ pub const PropertyMember = Member("Property", 19, struct {
         var fget: ?*Object = null;
         var fset: ?*Object = null;
         var fdel: ?*Object = null;
-        var cached: bool = false;
+        var cached: c_int = 0;
         try py.parseTupleAndKeywords(args, kwargs, "|OOOp", @ptrCast(&kwlist), .{ &fget, &fset, &fdel, &cached });
         if (py.notNone(fget) and !fget.?.isCallable()) {
             try py.typeError("fget must be callable or None", .{});
@@ -32,7 +32,7 @@ pub const PropertyMember = Member("Property", 19, struct {
         if (py.notNone(fdel) and !fdel.?.isCallable()) {
             try py.typeError("fdel must be callable or None", .{});
         }
-        if (cached and py.notNone(fset)) {
+        if (cached != 0 and py.notNone(fset)) {
             try py.typeError("Cached properties are read-only, but a setter was specified", .{});
         }
         self.validate_context = @ptrCast(try Tuple.packNewrefs(.{
@@ -40,7 +40,7 @@ pub const PropertyMember = Member("Property", 19, struct {
             fset orelse py.None(),
             fdel orelse py.None(),
         }));
-        if (cached) {
+        if (cached != 0) {
             self.info.storage_mode = .pointer;
         } else {
             self.info.storage_mode = .none;
@@ -52,7 +52,7 @@ pub const PropertyMember = Member("Property", 19, struct {
         const tuple: *Tuple = @ptrCast(self.validate_context.?);
         const fget = try tuple.get(0);
         if (fget.isNone()) {
-            const attr = try Str.format("_get_{s}", .{self.name.?.data()});
+            const attr = try Str.new("_get_{s}", .{self.name.?.data()});
             defer attr.decref();
             return try atom.callMethod(attr, .{});
         }
@@ -62,12 +62,10 @@ pub const PropertyMember = Member("Property", 19, struct {
     pub inline fn getattr(self: *MemberBase, atom: *Atom) py.Error!*Object {
         if (self.info.storage_mode == .pointer) {
             if (atom.slotPtr(self.info.index)) |ptr| {
-                if (ptr.*) |v| {
-                    return v.newref();
+                if (ptr.* == null) {
+                    ptr.* = try get(self, atom);
                 }
-                const v = try get(self, atom);
-                ptr.* = v;
-                return v.newref();
+                return ptr.*.?.newref();
             }
         }
         return try get(self, atom);
@@ -77,7 +75,7 @@ pub const PropertyMember = Member("Property", 19, struct {
         const tuple: *Tuple = @ptrCast(self.validate_context.?);
         const fset = try tuple.get(1);
         if (fset.isNone()) {
-            const attr = try Str.format("_set_{s}", .{self.name.?.data()});
+            const attr = try Str.new("_set_{s}", .{self.name.?.data()});
             defer attr.decref();
             const r = try atom.callMethod(attr, .{value});
             defer r.decref();
@@ -91,7 +89,7 @@ pub const PropertyMember = Member("Property", 19, struct {
         const tuple: *Tuple = @ptrCast(self.validate_context.?);
         const fdel = try tuple.get(2);
         if (fdel.isNone()) {
-            const attr = try Str.format("_del_{s}", .{self.name.?.data()});
+            const attr = try Str.new("_del_{s}", .{self.name.?.data()});
             defer attr.decref();
             const r = try atom.callMethod(attr, .{});
             defer r.decref();

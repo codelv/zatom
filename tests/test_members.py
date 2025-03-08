@@ -76,10 +76,10 @@ def test_atom_member_tag():
 
     assert A.m.metadata is not None
     assert A.m.metadata["foo"] is True
-    del A.m.metadata
-    assert A.m.metadata is None
     A.m.metadata = {"bar": 1}
     assert A.m.metadata == {"bar": 1}
+    del A.m.metadata
+    assert A.m.metadata is None
     with pytest.raises(TypeError):
         A.m.metadata = 1
 

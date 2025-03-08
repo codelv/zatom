@@ -108,7 +108,7 @@ pub const MemberBase = extern struct {
         if (self.info.storage_mode == .none) {
             return py.returnNone();
         }
-        return @ptrCast(Int.fromNumberUnchecked(self.info.index));
+        return @ptrCast(Int.newUnchecked(self.info.index));
     }
 
     pub fn set_index(self: *Self, value: ?*Object, _: ?*anyopaque) c_int {
@@ -123,7 +123,7 @@ pub const MemberBase = extern struct {
     }
 
     pub fn get_bitsize(self: *Self) ?*Int {
-        return Int.fromNumberUnchecked(@as(usize, self.info.width) + 1);
+        return Int.newUnchecked(@as(usize, self.info.width) + 1);
     }
 
     pub fn set_bitsize(self: *Self, value: ?*Object, _: ?*anyopaque) c_int {
@@ -142,7 +142,7 @@ pub const MemberBase = extern struct {
     }
 
     pub fn get_offset(self: *Self) ?*Int {
-        return Int.fromNumberUnchecked(self.info.offset);
+        return Int.newUnchecked(self.info.offset);
     }
 
     pub fn set_offset(self: *Self, value: ?*Object, _: ?*anyopaque) c_int {
@@ -161,41 +161,35 @@ pub const MemberBase = extern struct {
     }
 
     pub fn get_owner(self: *Self) ?*Object {
-        if (self.owner) |owner| {
-            return @ptrCast(owner.newref());
-        }
-        return null;
+        return py.returnOptional(self.owner);
     }
 
     pub fn get_metadata(self: *Self) ?*Object {
-        if (self.metadata) |metadata| {
-            return @ptrCast(metadata.newref());
-        }
-        return py.returnNone();
+        return py.returnOptional(self.metadata);
     }
 
     pub fn set_metadata(self: *Self, value: ?*Object, _: ?*anyopaque) c_int {
         if (value == null or value.?.isNone()) {
-            py.xsetref(@ptrCast(&self.metadata), null);
+            py.clear(&self.metadata);
             return 0;
         } else if (Dict.check(value.?)) {
-            py.xsetref(@ptrCast(&self.metadata), value);
+            py.xsetref(@ptrCast(&self.metadata), value.?.newref());
             return 0;
         }
-        py.typeError("Member metadata must be a dict or None", .{}) catch return -1;
+        return py.typeErrorObject(-1, "Member metadata must be a dict or None", .{});
     }
 
     // --------------------------------------------------------------------------
     // Methods
     // --------------------------------------------------------------------------
     pub fn get_slot(self: *Self, atom: *Atom) ?*Object {
+        if (!atom.typeCheckSelf()) {
+            return py.typeErrorObject(null, "Invalid argument. Signature is get_slot(atom: Atom)", .{});
+        }
         if (self.info.storage_mode != .none) {
-            if (!atom.typeCheckSelf()) {
-                py.typeError("Atom", .{}) catch return null;
-            }
             if (atom.slotPtr(self.info.index)) |ptr| {
                 switch (self.info.storage_mode) {
-                    .pointer => return ptr.*,
+                    .pointer => return py.returnOptional(ptr.*),
                     .static => {
                         const data_ptr: *usize = @ptrCast(ptr);
                         if (data_ptr.* & self.slotSetMask() != 0) {
@@ -208,31 +202,29 @@ pub const MemberBase = extern struct {
                 }
             }
         }
-        py.attributeError("Member has no slot", .{}) catch return null;
+        return py.attributeErrorObject(null, "Member '{s}' of '{s}' has no storage", .{ self.name.?.data(), atom.typeName() });
     }
 
     pub fn set_slot(self: *Self, args: [*]*Object, n: isize) ?*Object {
-        if (n != 2) {
-            py.attributeError("set_slot takes 2 arguments", .{}) catch return null;
+        if (n != 2 or !Atom.check(args[0])) {
+            return py.attributeErrorObject(null, "Invalid arguments. Signature is set_slot(atom: Atom, value: object)", .{});
         }
+        const atom: *Atom = @ptrCast(args[0]);
+        const value = args[1];
         if (self.info.storage_mode != .none) {
-            const atom: *Atom = @ptrCast(args[0]);
-            if (!atom.typeCheckSelf()) {
-                py.typeError("Atom", .{}) catch return null;
-            }
             if (atom.slotPtr(self.info.index)) |ptr| {
                 switch (self.info.storage_mode) {
                     .pointer => {
-                        ptr.* = args[1];
+                        py.xsetref(ptr, value.newref());
                     },
                     .static => {
-                        if (!Int.check(args[1])) {
-                            py.typeError("set_slot requires an int", .{}) catch return null;
+                        if (!Int.check(value)) {
+                            return py.typeErrorObject(null, "set_slot requires an int", .{});
                         }
-                        const data = Int.as(@ptrCast(args[1]), usize) catch return null;
+                        const data = Int.as(@ptrCast(value), usize) catch return null;
                         const max_value = std.math.pow(usize, 2, self.info.width + 1);
                         if (data < 0 or data > max_value) {
-                            py.typeError("set_slot data out of range 0..{}", .{max_value}) catch return null;
+                            return py.typeErrorObject(null, "set_slot data out of range 0..{}", .{max_value});
                         }
                         const data_ptr: *usize = @ptrCast(ptr);
                         const data_mask = self.slotDataMask();
@@ -245,18 +237,18 @@ pub const MemberBase = extern struct {
                 return py.returnNone();
             }
         }
-        py.attributeError("Member has no slot", .{}) catch return null;
+        return py.attributeErrorObject(null, "Member '{s}' of '{s}' has no storage", .{ self.name.?.data(), atom.typeName() });
     }
 
     pub fn del_slot(self: *Self, atom: *Atom) ?*Object {
+        if (!atom.typeCheckSelf()) {
+            return py.typeErrorObject(null, "Invalid argument. Signature is del_slot(atom: Atom)", .{});
+        }
         if (self.info.storage_mode != .none) {
-            if (!atom.typeCheckSelf()) {
-                return py.typeErrorObject(null, "Atom", .{});
-            }
             if (atom.slotPtr(self.info.index)) |ptr| {
                 switch (self.info.storage_mode) {
                     .pointer => {
-                        ptr.* = null;
+                        py.clear(ptr);
                     },
                     .static => {
                         const data_ptr: *usize = @ptrCast(ptr);
@@ -267,7 +259,7 @@ pub const MemberBase = extern struct {
                 return py.returnNone();
             }
         }
-        return py.attributeErrorObject(null, "Member has no slot", .{});
+        return py.attributeErrorObject(null, "Member '{s}' of '{s}' has no storage", .{ self.name.?.data(), atom.typeName() });
     }
 
     pub fn do_default_value(self: *Self, atom: *Atom) ?*Object {
@@ -666,33 +658,29 @@ pub const MemberBase = extern struct {
         }
     }
 
+    // Returns new reference
     pub fn cloneOrError(self: *Self) !*Self {
-        const result: *Self = @ptrCast(try self.typeref().genericNew(null, null));
+        // try py.print("Member.clone({?})\n", .{self.name.?});
+        const cls = self.typeref();
+        const result: *Self = @ptrCast(try cls.genericNew(null, null));
         errdefer result.decref();
         result.info = self.info;
         if (self.name) |name| {
             result.name = name.newref();
         }
-        errdefer if (result.name) |o| o.decref();
-
         if (self.owner) |o| {
             result.owner = o.newref();
         }
-        errdefer if (result.owner) |o| o.decref();
-
         if (self.metadata) |metadata| {
             result.metadata = try metadata.copy();
         }
-        errdefer if (result.metadata) |metadata| metadata.decref();
-
         inline for (.{ "default", "validate", "coercer" }) |name| {
             const field_name = name ++ "_context";
             if (@field(self, field_name)) |context| {
                 @field(result, field_name) = context.newref();
             }
-            errdefer if (@field(result, field_name)) |context| context.decref();
         }
-        return @ptrCast(result);
+        return result;
     }
 
     // Mask for slot's data bits
@@ -766,6 +754,7 @@ pub const MemberBase = extern struct {
     }
 
     pub fn clear(self: *Self) c_int {
+        // py.print("Member.clear(name={?}, owner={?})", .{self.name, self.owner}) catch return -1;
         py.clearAll(.{
             &self.name,
             &self.owner,
@@ -991,7 +980,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 return value.newref();
             } else {
                 // @branchHint(.cold);
-                try py.attributeError("Member {s} has no slot", .{self.base.name.?.data()});
+                try py.attributeError("Member '{s}' of '{s}' has no storage", .{ self.base.name.?.data(), atom.typeName() });
                 unreachable;
             }
         }
@@ -1031,7 +1020,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 return; // Ok
             } else {
                 // @branchHint(.cold);
-                return py.attributeError("Member has no slot", .{});
+                return py.attributeError("Member '{s}' of '{s}' has no storage", .{ self.base.name.?.data(), atom.typeName() });
             }
         }
 
@@ -1053,7 +1042,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 // Else nothing to do
             } else {
                 // @branchHint(.cold);
-                return py.attributeError("Member has no slot", .{});
+                return py.attributeError("Member '{s}' of '{s}' has no storage", .{ self.base.name.?.data(), atom.typeName() });
             }
         }
 

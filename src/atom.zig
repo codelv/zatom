@@ -36,14 +36,23 @@ comptime {
     }
 }
 
+const SlotType = enum {
+    inlined,
+    pointer,
+};
+
 // Base Atom class
 pub const Atom = extern struct {
     const Self = @This();
     // Reference to the type. This is set in ready
     pub var TypeObject: ?*Type = null;
+    pub const slot_type = SlotType.inlined;
     base: Object,
     info: AtomInfo,
-    slots: [1]?*Object,
+    slots: switch (slot_type) {
+        .inlined => [1]?*Object,
+        .pointer => [*]?*Object,
+    },
 
     pub usingnamespace py.ObjectProtocol(Self);
 
@@ -54,6 +63,16 @@ pub const Atom = extern struct {
         const self: *Self = @ptrCast(cls.genericNew(args, kwargs) catch return null);
         const meta: *AtomMeta = @ptrCast(cls);
         self.info.slot_count = meta.info.slot_count;
+        if (comptime slot_type == .pointer) {
+            const byte_count = self.info.slot_count * @sizeOf(*Object);
+            if (py.allocator.rawAlloc(byte_count, @alignOf(*Object), 0)) |ptr| {
+                @memset(ptr[0..byte_count], 0);
+                self.slots = @alignCast(@ptrCast(ptr));
+            } else {
+                defer self.decref();
+                return py.memoryErrorObject(null);
+            }
+        }
         return self;
     }
 
@@ -71,13 +90,12 @@ pub const Atom = extern struct {
     }
 
     // Get a pointer to slot address at the given index
-    pub inline fn slotPtr(self: *Self, i: u32) ?*?*Object {
-        if (i < self.info.slot_count) {
-            // This intentionally disables safety checking because it
-            // intentionally writes into the inlined slots in the Atom(n) subclass
-            // as long as the slot_count was properly set by the metaclass this is ok.
+    pub inline fn slotPtr(self: *Self, index: u16) ?*?*Object {
+        //std.debug.assert(member.info.storage_mode != .none);
+        if (index < self.info.slot_count) {
+            // Disable bounds checking
             @setRuntimeSafety(false);
-            return &self.slots[i];
+            return &self.slots[index];
         }
         return null;
     }
@@ -306,6 +324,7 @@ pub const Atom = extern struct {
     }
 
     pub fn clear(self: *Self) c_int {
+        // py.print("Atom.clear({s})\n", .{self.typeName()}) catch return -1;
         if (self.dynamicObserverPool()) |pool| {
             pool.clear(py.allocator) catch return -1;
         }
@@ -316,8 +335,8 @@ pub const Atom = extern struct {
         std.debug.assert(meta.typeCheckSelf());
         if (meta.atom_members) |members| {
             for (members.items) |member| {
-                @setRuntimeSafety(false);
                 if (member.info.storage_mode == .pointer and member.info.index < self.info.slot_count) {
+                    @setRuntimeSafety(false);
                     py.clear(&self.slots[member.info.index]);
                 }
             }
@@ -339,8 +358,8 @@ pub const Atom = extern struct {
         std.debug.assert(meta.typeCheckSelf());
         if (meta.atom_members) |members| {
             for (members.items) |member| {
-                @setRuntimeSafety(false);
                 if (member.info.storage_mode == .pointer and member.info.index < self.info.slot_count) {
+                    @setRuntimeSafety(false);
                     const r = py.visit(self.slots[member.info.index], visit, arg);
                     if (r != 0)
                         return r;
