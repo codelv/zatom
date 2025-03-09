@@ -1,3 +1,4 @@
+from pathlib import Path
 from setuptools import Extension, setup, find_packages
 
 
@@ -5,9 +6,14 @@ ext_modules = [
     Extension(
         'zatom.api',
         sources=[
-            'src/api.zig'
+            #"src/api.zig",
         ],
-        extra_compile_args=["-OReleaseSafe"]
+        extra_compile_args=[
+            "-OReleaseSafe",
+            "--dep", "py",
+            f"-Mroot={Path('src/api.zig').absolute()}",
+            f"-Mpy={Path('deps/py.zig/py.zig').absolute()}",
+        ]
     )
 ]
 

@@ -1,4 +1,4 @@
-const py = @import("../api.zig").py;
+const py = @import("py");
 const std = @import("std");
 const Object = py.Object;
 const Tuple = py.Tuple;
@@ -22,7 +22,7 @@ pub const EnumMember = Member("Enum", 2, struct {
         if (n < 1) {
             return py.typeError("at least one enum item is required", .{});
         }
-        var default_value: *Object = try args.get(0);
+        var default_value: *Object = args.getUnsafe(0).?;
         if (kwargs) |kw| {
             if (kw.get(@ptrCast(default_str.?))) |v| {
                 if (try args.contains(v)) {

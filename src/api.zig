@@ -1,4 +1,4 @@
-pub const py = @import("deps/py.zig/py.zig");
+const py = @import("py");
 const c = py.c;
 const Object = py.Object;
 const Module = py.Module;
@@ -13,6 +13,12 @@ const observation = @import("observation.zig");
 const observer_pool = @import("observer_pool.zig");
 const modes = @import("modes.zig");
 pub const package_name = "zatom";
+
+pub const DebugLevel = enum {
+    off,
+    verbose,
+};
+pub const debug_level: DebugLevel = .verbose;
 
 fn modexec(mod: *py.Module) !c_int {
     try member.initModule(mod);

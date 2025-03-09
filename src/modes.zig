@@ -1,4 +1,4 @@
-const py = @import("api.zig").py;
+const py = @import("py");
 
 // Enum
 pub const DefaultValue = enum(u8) {

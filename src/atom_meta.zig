@@ -1,4 +1,4 @@
-const py = @import("api.zig").py;
+const py = @import("py");
 const std = @import("std");
 const Type = py.Type;
 const Metaclass = py.Metaclass;
@@ -166,7 +166,9 @@ pub const AtomMeta = extern struct {
             try py.typeError("AtomMeta's 3rd arg must be a dict", .{});
         }
 
-        // try py.print("AtomMeta.__new__({s}, '{s}')\n", .{meta.className(), name,});
+        if (comptime @import("api.zig").debug_level == .verbose) {
+            try py.print("AtomMeta.new({s}, '{s}')\n", .{meta.className(), name});
+        }
 
         // Modify the bases
         const num_bases = try bases.size();
@@ -592,7 +594,9 @@ pub const AtomMeta = extern struct {
     // Type definition
     // --------------------------------------------------------------------------
     pub fn clear(self: *Self) c_int {
-        // py.print("AtomMeta.clear({s})\n", .{Type.className(@ptrCast(self))}) catch return -1;
+        if (comptime @import("api.zig").debug_level == .verbose) {
+            py.print("AtomMeta.clear({s})\n", .{Type.className(@ptrCast(self))}) catch return -1;
+        }
 
         // The pool owns the static_observers so we don't need to release it
         if (self.pool_manager) |mgr| {

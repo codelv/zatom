@@ -1,4 +1,4 @@
-const py = @import("api.zig").py;
+const py = @import("py");
 const std = @import("std");
 const Type = py.Type;
 const Object = py.Object;
@@ -324,7 +324,9 @@ pub const Atom = extern struct {
     }
 
     pub fn clear(self: *Self) c_int {
-        // py.print("Atom.clear({s})\n", .{self.typeName()}) catch return -1;
+        if (comptime @import("api.zig").debug_level == .verbose) {
+            py.print("Atom.clear({s})\n", .{self.typeName()}) catch return -1;
+        }
         if (self.dynamicObserverPool()) |pool| {
             pool.clear(py.allocator) catch return -1;
         }
@@ -369,11 +371,6 @@ pub const Atom = extern struct {
         return 0;
     }
 
-    const getset = [_]py.GetSetDef{
-        //.{ .name = "__slots__", .get = @ptrCast(&get_type_slots), .set = null, .doc = "Type slots" },
-        .{}, // sentinel
-    };
-
     const methods = [_]py.MethodDef{
         .{ .ml_name = "get_member", .ml_meth = @constCast(@ptrCast(&get_member)), .ml_flags = py.c.METH_CLASS | py.c.METH_O, .ml_doc = "Get the atom member with the given name" },
         .{ .ml_name = "members", .ml_meth = @constCast(@ptrCast(&get_members)), .ml_flags = py.c.METH_CLASS | py.c.METH_NOARGS, .ml_doc = "Get atom members" },
@@ -393,8 +390,6 @@ pub const Atom = extern struct {
         .{ .slot = py.c.Py_tp_traverse, .pfunc = @constCast(@ptrCast(&traverse)) },
         .{ .slot = py.c.Py_tp_clear, .pfunc = @constCast(@ptrCast(&clear)) },
         .{ .slot = py.c.Py_tp_methods, .pfunc = @constCast(@ptrCast(&methods)) },
-        //.{ .slot = py.c.Py_tp_members, .pfunc = @constCast(@ptrCast(&type_members)) },
-        // .{ .slot = py.c.Py_tp_getset, .pfunc = @constCast(@ptrCast(&getset)) },
         .{}, // sentinel
     };
     pub var TypeSpec = py.TypeSpec{

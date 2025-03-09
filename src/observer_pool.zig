@@ -1,4 +1,4 @@
-const py = @import("api.zig").py;
+const py = @import("py");
 const std = @import("std");
 const Str = py.Str;
 const Tuple = py.Tuple;

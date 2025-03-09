@@ -1,4 +1,4 @@
-const py = @import("../api.zig").py;
+const py = @import("py");
 const std = @import("std");
 const Object = py.Object;
 const Type = py.Type;

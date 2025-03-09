@@ -1,4 +1,4 @@
-const py = @import("api.zig").py;
+const py = @import("py");
 const std = @import("std");
 const Type = py.Type;
 const Metaclass = py.Metaclass;
@@ -660,7 +660,9 @@ pub const MemberBase = extern struct {
 
     // Returns new reference
     pub fn cloneOrError(self: *Self) !*Self {
-        // try py.print("Member.clone({?})\n", .{self.name.?});
+        if (comptime @import("api.zig").debug_level == .verbose) {
+            try py.print("Member.clone('{s}')\n", .{self.name.?});
+        }
         const cls = self.typeref();
         const result: *Self = @ptrCast(try cls.genericNew(null, null));
         errdefer result.decref();
@@ -737,7 +739,7 @@ pub const MemberBase = extern struct {
                     return impl.defaultMethodName(self, atom);
                 }
                 if (self.default_context) |callable| {
-                    return callable.callArgs(.{ atom, self.name });
+                    return callable.callArgs(.{ atom, self.name.? });
                 }
                 try py.systemError("default context missing", .{});
                 unreachable;
@@ -754,7 +756,9 @@ pub const MemberBase = extern struct {
     }
 
     pub fn clear(self: *Self) c_int {
-        // py.print("Member.clear(name={?}, owner={?})", .{self.name, self.owner}) catch return -1;
+        if (comptime @import("api.zig").debug_level == .verbose) {
+            py.print("Member.clear(name={?}, owner={?})", .{self.name, self.owner}) catch return -1;
+        }
         py.clearAll(.{
             &self.name,
             &self.owner,
