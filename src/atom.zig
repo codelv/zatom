@@ -374,18 +374,18 @@ pub const Atom = extern struct {
                 if (member.info.storage_mode == .pointer and member.info.index < self.info.slot_count) {
                     @setRuntimeSafety(false);
                     const slot = self.slots[member.info.index];
-                    if (comptime @import("api.zig").debug_level == .verbose) {
-                        py.print("Atom.traverse({s}, member=", .{self.typeName()}) catch return -1;
-                        py.print("(name: {?s}, owner: {?s}, meta: {?s}, default_context: {?s}, validate_context: {?s}, coercer_context: {?s})", .{
-                            member.name,
-                            member.owner,
-                            member.metadata,
-                            member.default_context,
-                            member.validate_context,
-                            member.coercer_context,
-                        }) catch return -1;
-                        py.print(", slot={?s})\n", .{slot}) catch return -1;
-                    }
+//                     if (comptime @import("api.zig").debug_level == .verbose) {
+//                         py.print("Atom.traverse({s}, member=", .{self.typeName()}) catch return -1;
+//                         py.print("(name: {?s}, owner: {?s}, meta: {?s}, default_context: {?s}, validate_context: {?s}, coercer_context: {?s})", .{
+//                             member.name,
+//                             member.owner,
+//                             member.metadata,
+//                             member.default_context,
+//                             member.validate_context,
+//                             member.coercer_context,
+//                         }) catch return -1;
+//                         py.print(", slot={?s})\n", .{slot}) catch return -1;
+//                     }
                     const r = py.visit(slot, visit, arg);
                     if (r != 0)
                         return r;

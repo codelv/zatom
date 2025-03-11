@@ -33,7 +33,7 @@ pub const CoercedMember = Member("Coerced", 18, struct {
         var coercer: ?*Object = null;
         try py.parseTupleAndKeywords(args, kwargs, "O|OOOO", @ptrCast(&kwlist), .{ &kind, &init_args, &init_kwargs, &factory, &coercer });
         try self.validateTypeOrTupleOfTypes(kind);
-        self.validate_context = kind.newref();
+        py.xsetref(&self.validate_context, kind.newref());
 
         const cls = if (Tuple.check(kind)) Tuple.getUnsafe(@ptrCast(kind), 0).? else kind;
 
@@ -42,7 +42,7 @@ pub const CoercedMember = Member("Coerced", 18, struct {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
-            self.default_context = factory.?.newref();
+            py.xsetref(&self.default_context, factory.?.newref());
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
             const partial_kwargs: ?*Dict = blk: {
                 if (init_kwargs) |v| {
@@ -66,19 +66,19 @@ pub const CoercedMember = Member("Coerced", 18, struct {
                 break :blk try Tuple.packNewrefs(.{cls});
             };
             defer partial_args.decref();
-            self.default_context = try partial.?.call(partial_args, partial_kwargs);
+            py.xsetref(&self.default_context, try partial.?.call(partial_args, partial_kwargs));
         } else {
-            self.default_context = cls.newref();
+            py.xsetref(&self.default_context, cls.newref());
         }
 
         if (py.notNone(coercer)) {
             if (!coercer.?.isCallable()) {
                 return py.typeError("Coerced member's coercer must be callable, got: {s}", .{coercer.?.typeName()});
             }
-            self.coercer_context = coercer.?.newref();
+            py.xsetref(&self.coercer_context, coercer.?.newref());
         } else {
             // It's possbile that there is no init args which could be a problem
-            self.coercer_context = cls.newref();
+            py.xsetref(&self.coercer_context, cls.newref());
         }
     }
 

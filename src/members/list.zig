@@ -242,22 +242,20 @@ pub const ListMember = Member("List", 6, struct {
                 return py.typeError("factory must be a callable that returns the default value", .{});
             }
             self.info.default_mode = .func;
-            self.default_context = default_factory.?.newref();
+            py.xsetref(&self.default_context, default_factory.?.newref());
         } else if (py.notNone(default_value)) {
             if (!List.check(default_value.?)) {
                 return py.typeError("List default must be a list", .{});
             }
-            self.default_context = default_value.?.newref();
+            py.xsetref(&self.default_context, default_value.?.newref());
         } else {
-            self.default_context = @ptrCast(try List.new(0));
+            py.xsetref(&self.default_context, @ptrCast(try List.new(0)));
         }
-        errdefer py.clear(&self.default_context);
-        errdefer py.clear(&self.validate_context);
         if (item) |kind| {
             if (MemberBase.check(kind)) {
-                self.validate_context = kind.newref();
+                py.xsetref(&self.validate_context, kind.newref());
             } else if (!kind.isNone()) {
-                self.validate_context = try InstanceMember.TypeObject.?.callArgs(.{kind});
+                py.xsetref(&self.validate_context, try InstanceMember.TypeObject.?.callArgs(.{kind}));
             }
             if (self.validate_context) |context| {
                 try self.bindValidatorMember(@ptrCast(context), member.item_str.?);

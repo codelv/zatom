@@ -35,11 +35,11 @@ pub const PropertyMember = Member("Property", 19, struct {
         if (cached != 0 and py.notNone(fset)) {
             try py.typeError("Cached properties are read-only, but a setter was specified", .{});
         }
-        self.validate_context = @ptrCast(try Tuple.packNewrefs(.{
+        py.xsetref(&self.validate_context, @ptrCast(try Tuple.packNewrefs(.{
             fget orelse py.None(),
             fset orelse py.None(),
             fdel orelse py.None(),
-        }));
+        })));
         if (cached != 0) {
             self.info.storage_mode = .pointer;
         } else {

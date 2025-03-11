@@ -33,15 +33,14 @@ pub const InstanceMember = Member("Instance", 4, struct {
         var optional: ?*Object = null;
         try py.parseTupleAndKeywords(args, kwargs, "O|OOOO", @ptrCast(&kwlist), .{ &kind, &init_args, &init_kwargs, &factory, &optional });
         try self.validateTypeOrTupleOfTypes(kind);
-        self.validate_context = kind.newref();
-        errdefer py.clear(&self.validate_context);
+        py.xsetref(&self.validate_context, kind.newref());
 
         if (py.notNone(factory)) {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
             self.info.default_mode = .func;
-            self.default_context = factory.?.newref();
+            py.xsetref(&self.default_context, factory.?.newref());
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
             self.info.default_mode = .func;
             const cls = if (Tuple.check(kind)) try Tuple.get(@ptrCast(kind), 0) else kind;
@@ -68,9 +67,9 @@ pub const InstanceMember = Member("Instance", 4, struct {
                 break :blk try Tuple.packNewrefs(.{cls});
             };
             defer partial_args.decref();
-            self.default_context = try partial.?.call(partial_args, partial_kwargs);
+            py.xsetref(&self.default_context, try partial.?.call(partial_args, partial_kwargs));
         } else {
-            self.default_context = py.returnNone();
+            py.xsetref(&self.default_context, py.returnNone());
         }
 
         // If a factory or init args were provided set to to not optional
@@ -142,14 +141,14 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
         if (!resolve_func.isCallable()) {
             return py.typeError("resolve must be a callable that returns the type", .{});
         }
-        self.validate_context = resolve_func.newref();
+        py.xsetref(&self.validate_context, resolve_func.newref());
 
         if (py.notNone(factory)) {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
             self.info.default_mode = .func;
-            self.default_context = factory.?.newref();
+            py.xsetref(&self.default_context, factory.?.newref());
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
             self.info.default_mode = .func;
 
@@ -175,9 +174,9 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
                 break :blk py.None();
             };
             // Make a tuple of (args, kwargs) to call with the resolved type
-            self.default_context = @ptrCast(try Tuple.packNewrefs(.{ partial_args, partial_kwargs }));
+            py.xsetref(&self.default_context, @ptrCast(try Tuple.packNewrefs(.{ partial_args, partial_kwargs })));
         } else {
-            self.default_context = py.returnNone();
+            py.xsetref(&self.default_context, py.returnNone());
         }
 
         // If a factory or init args were provided set to to not optional

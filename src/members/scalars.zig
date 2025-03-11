@@ -139,7 +139,7 @@ pub const ConstantMember = Member("Constant", 19, struct {
         try py.parseTupleAndKeywords(args, kwargs, "|OOO", @ptrCast(&kwlist), .{ &default, &factory, &kind });
         if (py.notNone(kind)) {
             try self.validateTypeOrTupleOfTypes(kind.?);
-            self.validate_context = kind.?.newref();
+            py.xsetref(&self.validate_context, kind.?.newref());
         }
 
         if (py.notNone(factory)) {
@@ -147,11 +147,11 @@ pub const ConstantMember = Member("Constant", 19, struct {
                 return py.typeError("factory must be callable", .{});
             }
             self.info.default_mode = .func;
-            self.default_context = factory.?.newref();
+            py.xsetref(&self.default_context, factory.?.newref());
         } else if (default) |v| {
-            self.default_context = v.newref();
+            py.xsetref(&self.default_context, v.newref());
         } else {
-            self.default_context = py.returnNone();
+            py.xsetref(&self.default_context, py.returnNone());
         }
     }
 
@@ -215,19 +215,19 @@ pub const RangeMember = Member("Range", 20, struct {
             }
         }
 
-        self.validate_context = @ptrCast(try py.Tuple.packNewrefs(.{
+        py.xsetref(&self.validate_context, @ptrCast(try py.Tuple.packNewrefs(.{
             low orelse py.None(),
             high orelse py.None(),
-        }));
+        })));
 
         if (py.notNone(value)) {
-            self.default_context = @ptrCast(value.?.newref());
+            py.xsetref(&self.default_context, @ptrCast(value.?.newref()));
         } else if (py.notNone(low)) {
-            self.default_context = low.?.newref();
+            py.xsetref(&self.default_context, low.?.newref());
         } else if (py.notNone(high)) {
-            self.default_context = high.?.newref();
+            py.xsetref(&self.default_context, high.?.newref());
         } else {
-            self.default_context = @ptrCast(try py.Int.new(0));
+            py.xsetref(&self.default_context, @ptrCast(try py.Int.new(0)));
         }
     }
 
@@ -312,21 +312,21 @@ pub const FloatRangeMember = Member("FloatRange", 21, struct {
             }
         }
         self.info.coerce = !strict;
-        self.validate_context = @ptrCast(try py.Tuple.packNewrefs(.{ low_value, high_value }));
+        py.xsetref(&self.validate_context, @ptrCast(try py.Tuple.packNewrefs(.{ low_value, high_value })));
         if (py.notNone(value)) {
             if (py.Float.check(value.?)) {
-                self.default_context = value.?.newref();
+                py.xsetref(&self.default_context, value.?.newref());
             } else if (!strict and py.Int.check(value.?)) {
-                self.default_context = @ptrCast(try py.Float.fromInt(@ptrCast(value.?)));
+                py.xsetref(&self.default_context, @ptrCast(try py.Float.fromInt(@ptrCast(value.?))));
             } else {
                 return py.typeError("value must be an float or None", .{});
             }
         } else if (py.notNone(low)) {
-            self.default_context = @ptrCast(low_value.newref());
+            py.xsetref(&self.default_context, @ptrCast(low_value.newref()));
         } else if (py.notNone(high)) {
-            self.default_context = @ptrCast(high_value.newref());
+            py.xsetref(&self.default_context, @ptrCast(high_value.newref()));
         } else {
-            self.default_context = @ptrCast(try py.Float.new(0.0));
+            py.xsetref(&self.default_context, @ptrCast(try py.Float.new(0.0)));
         }
     }
 

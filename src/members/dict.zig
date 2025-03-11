@@ -226,17 +226,15 @@ pub const DictMember = Member("Dict", 1, struct {
                 return py.typeError("factory must be a callable that returns the default value", .{});
             }
             self.info.default_mode = .func;
-            self.default_context = default_factory.?.newref();
+            py.xsetref(&self.default_context, default_factory.?.newref());
         } else if (py.notNone(default_value)) {
             if (!Dict.check(default_value.?)) {
                 return py.typeError("Dict default must be a dict", .{});
             }
-            self.default_context = default_value.?.newref();
+            py.xsetref(&self.default_context, default_value.?.newref());
         } else {
-            self.default_context = @ptrCast(try Dict.new());
+            py.xsetref(&self.default_context, @ptrCast(try Dict.new()));
         }
-        errdefer py.clear(&self.default_context);
-        errdefer py.clear(&self.validate_context);
 
         if (py.notNone(key_kind) or py.notNone(value_kind)) {
             const key_member = blk: {
@@ -261,7 +259,7 @@ pub const DictMember = Member("Dict", 1, struct {
             };
             defer value_member.decref();
 
-            self.validate_context = @ptrCast(try Tuple.packNewrefs(.{ key_member, value_member }));
+            py.xsetref(&self.validate_context, @ptrCast(try Tuple.packNewrefs(.{ key_member, value_member })));
             if (!key_member.isNone()) {
                 try self.bindValidatorMember(@ptrCast(key_member), member.key_str.?);
             }

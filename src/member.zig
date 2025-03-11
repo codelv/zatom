@@ -742,9 +742,9 @@ pub const MemberBase = extern struct {
     }
 
     pub fn clear(self: *Self) c_int {
-        if (comptime @import("api.zig").debug_level == .verbose) {
-            py.print("Member.clear(name={?}, owner={?})\n", .{self.name, self.owner}) catch return -1;
-        }
+//         if (comptime @import("api.zig").debug_level == .verbose) {
+//             py.print("Member.clear(name={?}, owner={?})\n", .{self.name, self.owner}) catch return -1;
+//         }
         py.clearAll(.{
             &self.name,
             &self.owner,
@@ -758,16 +758,16 @@ pub const MemberBase = extern struct {
 
     // Check if object is an atom_meta
     pub fn traverse(self: *Self, visit: py.visitproc, arg: ?*anyopaque) c_int {
-        if (comptime @import("api.zig").debug_level == .verbose) {
-            py.print("Member.traverse(name={?s}, owner: {?s}, meta: {?s}, default_context: {?s}, validate_context={?s}, coercer_context={?s})\n", .{
-                self.name,
-                self.owner,
-                self.metadata,
-                self.default_context,
-                self.validate_context,
-                self.coercer_context,
-            }) catch return -1;
-        }
+//         if (comptime @import("api.zig").debug_level == .verbose) {
+//             py.print("Member.traverse(name={?s}, owner: {?s}, meta: {?s}, default_context: {?s}, validate_context={?s}, coercer_context={?s})\n", .{
+//                 self.name,
+//                 self.owner,
+//                 self.metadata,
+//                 self.default_context,
+//                 self.validate_context,
+//                 self.coercer_context,
+//             }) catch return -1;
+//         }
         return py.visitAll(.{
             self.name,
             self.owner,
@@ -877,6 +877,9 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         // Default write slot implementation. It does not need to worry about discarding the old value but must
         // return whether it stole a reference to value or borrowed it so the caller can know how to handle it.
         pub inline fn writeSlot(self: *Self, atom: *Atom, slot: *?*Object, value: *Object) py.Error!Ownership {
+            if (comptime @import("api.zig").debug_level == .verbose) {
+                try py.print("{s}.writeSlot(name={?s}, storage_mode: {}, atom: {}, value: {?s})\n", .{type_name, self.base.name, storage_mode, atom,  value});
+            }
             switch (comptime storage_mode) {
                 .pointer => {
                     if (comptime @hasDecl(impl, "writeSlotPointer")) {
@@ -906,7 +909,10 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         }
 
         // Default delete slot implementation. It does not need to worry about discarding the old value
-        pub inline fn deleteSlot(self: *Self, _: *Atom, slot: *?*Object) void {
+        pub inline fn deleteSlot(self: *Self, atom: *Atom, slot: *?*Object) void {
+            if (comptime @import("api.zig").debug_level == .verbose) {
+                py.print("{s}.deleteSlot(name={?s}, storage_mode: {}, atom: {})\n", .{type_name, self.base.name, storage_mode, atom}) catch {};
+            }
             switch (comptime storage_mode) {
                 .pointer => {
                     slot.* = null;
@@ -926,6 +932,9 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         // pointer storage mode must return borrowed reference
         // static storage mode always returns a new reference
         pub inline fn readSlot(self: *Self, atom: *Atom, slot: *?*Object) py.Error!?*Object {
+            if (comptime @import("api.zig").debug_level == .verbose) {
+                try py.print("{s}.readSlot(name={?s}, storage_mode: {}, atom: {})\n", .{type_name, self.base.name, storage_mode, atom});
+            }
             switch (comptime storage_mode) {
                 .pointer => {
                     if (comptime @hasDecl(impl, "readSlotPointer")) {
@@ -1092,11 +1101,11 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                     try py.typeError("factory must be a callable that returns the default value", .{});
                 }
                 self.base.info.default_mode = .func;
-                self.base.default_context = default_factory.?.newref();
+                py.xsetref(&self.base.default_context, default_factory.?.newref());
             } else if (py.notNone(default_context)) {
-                self.base.default_context = default_context.?.newref();
+                py.xsetref(&self.base.default_context, default_context.?.newref());
             } else if (comptime @hasDecl(impl, "initDefault")) {
-                self.base.default_context = try impl.initDefault();
+                py.xsetref(&self.base.default_context, try impl.initDefault());
             }
         }
 

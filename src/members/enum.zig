@@ -40,8 +40,8 @@ pub const EnumMember = Member("Enum", 2, struct {
             return py.typeError("bitsize out of range", .{});
         }
         self.info.width = @intCast(bitsize - 1);
-        self.default_context = default_value.newref();
-        self.validate_context = @ptrCast(args.newref());
+        py.xsetref(&self.default_context, default_value.newref());
+        py.xsetref(&self.validate_context, @ptrCast(args.newref()));
     }
 
     pub inline fn writeSlotStatic(self: *MemberBase, _: *Atom, value: *Object) py.Error!usize {
