@@ -100,18 +100,22 @@ pub const InstanceMember = Member("Instance", 4, struct {
         if (new.isNone() and self.info.optional) {
             return new.newref(); // Ok
         }
-        const context = self.validate_context.?;
-        if (!try new.isInstance(context)) {
-            if (py.Tuple.check(context)) {
-                const types_str = try context.str();
-                defer types_str.decref();
-                try self.validateFail(atom, new, types_str.data());
-            } else {
-                try self.validateFail(atom, new, Type.className(@ptrCast(context)));
+        if (self.validate_context) |context| {
+            if (!try new.isInstance(context)) {
+                if (py.Tuple.check(context)) {
+                    const types_str = try context.str();
+                    defer types_str.decref();
+                    try self.validateFail(atom, new, types_str.data());
+                } else {
+                    try self.validateFail(atom, new, Type.className(@ptrCast(context)));
+                }
+                unreachable;
             }
-            unreachable;
+            return new.newref();
         }
-        return new.newref();
+        try py.systemError("Invalid validation context", .{});
+        unreachable;
+
     }
 });
 
@@ -139,7 +143,6 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
             return py.typeError("resolve must be a callable that returns the type", .{});
         }
         self.validate_context = resolve_func.newref();
-        errdefer py.clear(&self.validate_context);
 
         if (py.notNone(factory)) {
             if (!factory.?.isCallable()) {
@@ -230,18 +233,21 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
         if (!self.info.resolved) {
             try resolve(self, atom);
         }
-        const context = self.validate_context.?;
-        if (!try new.isInstance(context)) {
-            if (py.Tuple.check(context)) {
-                const types_str = try context.str();
-                defer types_str.decref();
-                try self.validateFail(atom, new, types_str.data());
-            } else {
-                try self.validateFail(atom, new, Type.className(@ptrCast(context)));
+        if (self.validate_context) |context| {
+            if (!try new.isInstance(context)) {
+                if (py.Tuple.check(context)) {
+                    const types_str = try context.str();
+                    defer types_str.decref();
+                    try self.validateFail(atom, new, types_str.data());
+                } else {
+                    try self.validateFail(atom, new, Type.className(@ptrCast(context)));
+                }
+                unreachable;
             }
-            unreachable;
+            return new.newref();
         }
-        return new.newref();
+        try py.systemError("Invalid validation context", .{});
+        unreachable;
     }
 });
 

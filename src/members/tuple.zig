@@ -41,8 +41,6 @@ pub const TupleMember = Member("Tuple", 15, struct {
         } else {
             self.default_context = @ptrCast(try Tuple.new(0));
         }
-        errdefer py.clear(&self.default_context);
-        errdefer py.clear(&self.validate_context);
         if (item) |kind| {
             // TODO: support any member
             if (MemberBase.check(kind)) {

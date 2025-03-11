@@ -101,12 +101,16 @@ pub const TypedMember = Member("Typed", 16, struct {
         if (new.isNone() and self.info.optional) {
             return new.newref(); // Ok
         }
-        const kind: *Type = @ptrCast(self.validate_context.?);
-        if (!new.typeCheck(kind)) {
-            try self.validateFail(atom, new, kind.className());
-            unreachable;
+        if (self.validate_context) |context| {
+            const kind: *Type = @ptrCast(context);
+            if (!new.typeCheck(kind)) {
+                try self.validateFail(atom, new, kind.className());
+                unreachable;
+            }
+            return new.newref();
         }
-        return new.newref();
+        try py.systemError("Invalid validation context", .{});
+        unreachable;
     }
 });
 
@@ -224,12 +228,16 @@ pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
         if (!self.info.resolved) {
             try resolve(self, atom);
         }
-        const kind: *Type = @ptrCast(self.validate_context.?);
-        if (!new.typeCheck(kind)) {
-            try self.validateFail(atom, new, kind.className());
-            unreachable;
+        if (self.validate_context) |context| {
+            const kind: *Type = @ptrCast(context);
+            if (!new.typeCheck(kind)) {
+                try self.validateFail(atom, new, kind.className());
+                unreachable;
+            }
+            return new.newref();
         }
-        return new.newref();
+        try py.systemError("Invalid validation context", .{});
+        unreachable;
     }
 });
 

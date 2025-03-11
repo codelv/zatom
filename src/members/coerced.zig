@@ -97,28 +97,29 @@ pub const CoercedMember = Member("Coerced", 18, struct {
     }
 
     pub inline fn coerce(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
-        const context = self.validate_context.?;
-        if (!try new.isInstance(context)) {
-            // Try to coerce
-            const coercer = self.validate_context.?;
-            const coerced = try coercer.callArgs(.{new});
-            {
-                errdefer coerced.decref(); // If isInstance fails decref
-                if (try coerced.isInstance(context)) {
-                    return coerced;
+        if (self.validate_context) |kind| {
+            if (!try new.isInstance(kind)) {
+                // Try to coerce
+                if (self.coercer_context) |coercer| {
+                    const coerced = try coercer.callArgs(.{new});
+                    defer coerced.decref();
+                    if (try coerced.isInstance(kind)) {
+                        return coerced.newref();
+                    }
                 }
+                if (py.Tuple.check(kind)) {
+                    const types_str = try kind.str();
+                    defer types_str.decref();
+                    try self.validateFail(atom, new, types_str.data());
+                } else {
+                    try self.validateFail(atom, new, Type.className(@ptrCast(kind)));
+                }
+                unreachable;
             }
-            coerced.decref(); // If still not valid, decref
-            if (py.Tuple.check(context)) {
-                const types_str = try context.str();
-                defer types_str.decref();
-                try self.validateFail(atom, new, types_str.data());
-            } else {
-                try self.validateFail(atom, new, Type.className(@ptrCast(context)));
-            }
-            unreachable;
+            return new.newref();
         }
-        return new.newref();
+        try py.systemError("Invalid validation context", .{});
+        unreachable;
     }
 });
 

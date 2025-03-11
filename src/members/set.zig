@@ -229,8 +229,6 @@ pub const SetMember = Member("Set", 14, struct {
         } else {
             self.default_context = @ptrCast(try Set.new(null));
         }
-        errdefer py.clear(&self.default_context);
-        errdefer py.clear(&self.validate_context);
         if (item) |kind| {
             // TODO: support any member
             if (MemberBase.check(kind)) {

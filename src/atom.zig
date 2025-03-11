@@ -73,6 +73,12 @@ pub const Atom = extern struct {
                 return py.memoryErrorObject(null);
             }
         }
+        if (comptime @import("api.zig").debug_level == .verbose) {
+            py.print("Atom.new({s})\n", .{self.typeName()}) catch {
+                defer self.decref();
+                return null;
+            };
+        }
         return self;
     }
 
@@ -90,14 +96,19 @@ pub const Atom = extern struct {
     }
 
     // Get a pointer to slot address at the given index
-    pub inline fn slotPtr(self: *Self, index: u16) ?*?*Object {
-        //std.debug.assert(member.info.storage_mode != .none);
-        if (index < self.info.slot_count) {
-            // Disable bounds checking
-            @setRuntimeSafety(false);
-            return &self.slots[index];
+    pub inline fn slotPtr(self: *Self, member: *MemberBase) py.Error!*?*Object {
+        if (member.info.storage_mode != .none) {
+            // @branchHint(.likely);
+            const i = member.info.index;
+            if (i < self.info.slot_count) {
+                // @branchHint(.likely);
+                // Disable bounds checking
+                @setRuntimeSafety(false);
+                return &self.slots[i];
+            }
         }
-        return null;
+        try py.attributeError("Member '{s}' of '{s}' has no storage", .{ member.name.?.data(), self.typeName() });
+        unreachable;
     }
 
     // Get a pointer to the ObserverPool from the manager on the type.
@@ -362,7 +373,20 @@ pub const Atom = extern struct {
             for (members.items) |member| {
                 if (member.info.storage_mode == .pointer and member.info.index < self.info.slot_count) {
                     @setRuntimeSafety(false);
-                    const r = py.visit(self.slots[member.info.index], visit, arg);
+                    const slot = self.slots[member.info.index];
+                    if (comptime @import("api.zig").debug_level == .verbose) {
+                        py.print("Atom.traverse({s}, member=", .{self.typeName()}) catch return -1;
+                        py.print("(name: {?s}, owner: {?s}, meta: {?s}, default_context: {?s}, validate_context: {?s}, coercer_context: {?s})", .{
+                            member.name,
+                            member.owner,
+                            member.metadata,
+                            member.default_context,
+                            member.validate_context,
+                            member.coercer_context,
+                        }) catch return -1;
+                        py.print(", slot={?s})\n", .{slot}) catch return -1;
+                    }
+                    const r = py.visit(slot, visit, arg);
                     if (r != 0)
                         return r;
                 }

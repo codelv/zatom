@@ -252,10 +252,10 @@ def test_forward_instance():
 
 def test_coerced():
     class A(Atom):
-        count = Coerced(int, (0,))
+        count = Coerced(int, (9,))
 
     a = A()
-    assert a.count == 0
+    assert a.count == 9
     a.count = "1"
     assert a.count == 1
 

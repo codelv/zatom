@@ -311,6 +311,8 @@ pub fn initModule(mod: *py.Module) !void {
     try TypedList.initType();
     errdefer TypedList.deinitType();
     try mod.addObjectRef("TypedList", @ptrCast(TypedList.TypeObject.?));
+
+    try mod.addObjectRef("ContainerList", @ptrCast(ListMember.TypeObject.?));
 }
 
 pub fn deinitModule(mod: *py.Module) void {

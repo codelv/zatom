@@ -61,12 +61,11 @@ pub const PropertyMember = Member("Property", 19, struct {
 
     pub inline fn getattr(self: *MemberBase, atom: *Atom) py.Error!*Object {
         if (self.info.storage_mode == .pointer) {
-            if (atom.slotPtr(self.info.index)) |ptr| {
-                if (ptr.* == null) {
-                    ptr.* = try get(self, atom);
-                }
-                return ptr.*.?.newref();
+            const ptr = try atom.slotPtr(@ptrCast(self));
+            if (ptr.* == null) {
+                ptr.* = try get(self, atom);
             }
+            return ptr.*.?.newref();
         }
         return try get(self, atom);
     }

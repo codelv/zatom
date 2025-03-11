@@ -236,22 +236,26 @@ pub const RangeMember = Member("Range", 20, struct {
             try self.validateFail(atom, new, "int");
             unreachable;
         }
-        const tuple: *py.Tuple = @ptrCast(self.validate_context.?);
-        const low = tuple.getUnsafe(0).?;
-        const high = tuple.getUnsafe(1).?;
-        if (!low.isNone() and try new.compare(.lt, low)) {
-            try py.valueError("range value for '{s}' of '{s}' is too small", .{
-                self.name.?.data(),
-                atom.typeName(),
-            });
+        if (self.validate_context) |context| {
+            const tuple: *py.Tuple = @ptrCast(context);
+            const low = tuple.getUnsafe(0).?;
+            const high = tuple.getUnsafe(1).?;
+            if (!low.isNone() and try new.compare(.lt, low)) {
+                try py.valueError("range value for '{s}' of '{s}' is too small", .{
+                    self.name.?.data(),
+                    atom.typeName(),
+                });
+            }
+            if (!high.isNone() and try new.compare(.gt, high)) {
+                try py.valueError("range value for '{s}' of '{s}' is too large", .{
+                    self.name.?.data(),
+                    atom.typeName(),
+                });
+            }
+            return new.newref();
         }
-        if (!high.isNone() and try new.compare(.gt, high)) {
-            try py.valueError("range value for '{s}' of '{s}' is too large", .{
-                self.name.?.data(),
-                atom.typeName(),
-            });
-        }
-        return new.newref();
+        try py.systemError("Invalid validation context", .{});
+        unreachable;
     }
 });
 
@@ -339,24 +343,28 @@ pub const FloatRangeMember = Member("FloatRange", 21, struct {
         };
         errdefer coerced.decref(); // Only decref if va
 
-        const tuple: *py.Tuple = @ptrCast(self.validate_context.?);
-        const low = tuple.getUnsafe(0).?;
-        const high = tuple.getUnsafe(1).?;
-        if (try coerced.compare(.lt, low)) {
-            try py.valueError("range value for '{s}' of '{s}' is too small", .{
-                self.name.?.data(),
-                atom.typeName(),
-            });
-            unreachable;
+        if (self.validate_context) |context| {
+            const tuple: *py.Tuple = @ptrCast(context);
+            const low = tuple.getUnsafe(0).?;
+            const high = tuple.getUnsafe(1).?;
+            if (try coerced.compare(.lt, low)) {
+                try py.valueError("range value for '{s}' of '{s}' is too small", .{
+                    self.name.?.data(),
+                    atom.typeName(),
+                });
+                unreachable;
+            }
+            if (try coerced.compare(.gt, high)) {
+                try py.valueError("range value for '{s}' of '{s}' is too large", .{
+                    self.name.?.data(),
+                    atom.typeName(),
+                });
+                unreachable;
+            }
+            return coerced;
         }
-        if (try coerced.compare(.gt, high)) {
-            try py.valueError("range value for '{s}' of '{s}' is too large", .{
-                self.name.?.data(),
-                atom.typeName(),
-            });
-            unreachable;
-        }
-        return coerced;
+        try py.systemError("Invalid validation context", .{});
+        unreachable;
     }
 });
 

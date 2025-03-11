@@ -45,34 +45,47 @@ pub const EnumMember = Member("Enum", 2, struct {
     }
 
     pub inline fn writeSlotStatic(self: *MemberBase, _: *Atom, value: *Object) py.Error!usize {
+        if (self.validate_context == null) {
+            try py.systemError("Invalid validation context", .{});
+        }
         const items: *Tuple = @ptrCast(self.validate_context.?);
         const data = try items.index(value);
         return data;
     }
 
     pub inline fn readSlotStatic(self: *MemberBase, _: *Atom, data: usize) py.Error!?*Object {
+        if (self.validate_context == null) {
+            try py.systemError("Invalid validation context", .{});
+        }
         const items: *Tuple = @ptrCast(self.validate_context.?);
         const value = try items.get(data);
         return value.newref();
     }
 
     pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
-        const items: *Tuple = @ptrCast(self.validate_context.?);
-        if (!try items.contains(new)) {
-            try py.valueError("invalid enum value for '{s}' of '{s}'. Got '{s}'", .{
-                self.name.?.data(),
-                atom.typeName(),
-                new.typeName(),
-            });
-            unreachable;
+        if (self.validate_context) |context| {
+            const items: *Tuple = @ptrCast(context);
+            if (!try items.contains(new)) {
+                try py.valueError("invalid enum value for '{s}' of '{s}'. Got '{s}'", .{
+                    self.name.?.data(),
+                    atom.typeName(),
+                    new.typeName(),
+                });
+                unreachable;
+            }
+            return new.newref();
         }
-        return new.newref();
+        try py.systemError("Invalid validation context", .{});
+        unreachable;
     }
 
     pub fn call(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) ?*Object {
         const kwlist = [_:null][*c]const u8{"item"};
         var new_default: *Object = undefined;
         py.parseTupleAndKeywords(args, kwargs, "O:__call__", @ptrCast(&kwlist), .{&new_default}) catch return null;
+        if (self.validate_context == null) {
+            return py.systemErrorObject(null, "Invalid validation context", .{});
+        }
         const items: *Tuple = @ptrCast(self.validate_context.?);
         if (!(items.contains(new_default) catch return null)) {
             return py.typeErrorObject(null, "invalid enum value", .{});
@@ -84,7 +97,7 @@ pub const EnumMember = Member("Enum", 2, struct {
     }
 
     pub fn get_items(self: *EnumMember) ?*Object {
-        return self.base.validate_context.?.newref();
+        return py.returnOptional(self.base.validate_context);
     }
 
     const getset = [_]py.GetSetDef{
