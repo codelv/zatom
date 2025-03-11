@@ -148,22 +148,21 @@ pub const ConstantMember = Member("Constant", 19, struct {
             }
             self.info.default_mode = .func;
             py.xsetref(&self.default_context, factory.?.newref());
-        } else if (default) |v| {
-            py.xsetref(&self.default_context, v.newref());
         } else {
-            py.xsetref(&self.default_context, py.returnNone());
+            self.info.default_mode = .static;
+            py.xsetref(&self.default_context, py.returnOptional(default));
         }
     }
 
     pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
-        if (self.validate_context) |context| {
-            if (!try new.isInstance(context)) {
-                if (py.Tuple.check(context)) {
-                    const types_str = try context.str();
+        if (self.validate_context) |kind| {
+            if (!try new.isInstance(kind)) {
+                if (py.Tuple.check(kind)) {
+                    const types_str = try kind.str();
                     defer types_str.decref();
                     try self.validateFail(atom, new, types_str.data());
                 } else {
-                    try self.validateFail(atom, new, py.Type.className(@ptrCast(context)));
+                    try self.validateFail(atom, new, py.Type.className(@ptrCast(kind)));
                 }
                 unreachable;
             }
@@ -220,6 +219,7 @@ pub const RangeMember = Member("Range", 20, struct {
             high orelse py.None(),
         })));
 
+        self.info.default_mode = .static;
         if (py.notNone(value)) {
             py.xsetref(&self.default_context, @ptrCast(value.?.newref()));
         } else if (py.notNone(low)) {
@@ -312,6 +312,7 @@ pub const FloatRangeMember = Member("FloatRange", 21, struct {
             }
         }
         self.info.coerce = !strict;
+        self.info.default_mode = .static;
         py.xsetref(&self.validate_context, @ptrCast(try py.Tuple.packNewrefs(.{ low_value, high_value })));
         if (py.notNone(value)) {
             if (py.Float.check(value.?)) {

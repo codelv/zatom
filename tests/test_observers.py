@@ -140,6 +140,40 @@ def test_observe_extended_decorator():
                 pass
 
 
+def test_observe_method():
+    changes = []
+
+    class A(Atom):
+        x = Int()
+        y = Int()
+
+        def _observe_x(self, change):
+            changes.append(change)
+
+    class B(A):
+        def _observe_y(self, change):
+            changes.append(change)
+
+    assert A.x.has_observers()
+    assert not A.y.has_observers()
+    a = A()
+    a.x
+    assert len(changes) == 1
+    assert changes[-1] == {"type": "create", "name": "x", "object": a, "value": 0}
+
+    assert B.x.has_observers()
+    assert B.y.has_observers()
+
+    b = B()
+    b.x = 1
+    assert len(changes) == 2
+    assert changes[-1] == {"type": "create", "name": "x", "object": b, "value": 1}
+
+    b.y = 2
+    assert len(changes) == 3
+    assert changes[-1] == {"type": "create", "name": "y", "object": b, "value": 2}
+
+
 def test_static_observe():
     class A(Atom):
         x = Int()

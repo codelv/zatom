@@ -36,10 +36,10 @@ pub const EnumMember = Member("Enum", 2, struct {
         }
 
         const bitsize = std.math.log2_int_ceil(usize, n);
-        if (bitsize == 0 or bitsize > @bitSizeOf(usize)) {
+        if (bitsize > @bitSizeOf(usize)) {
             return py.typeError("bitsize out of range", .{});
         }
-        self.info.width = @intCast(bitsize - 1);
+        self.info.width = @intCast(bitsize -| 1);
         py.xsetref(&self.default_context, default_value.newref());
         py.xsetref(&self.validate_context, @ptrCast(args.newref()));
     }
@@ -49,8 +49,7 @@ pub const EnumMember = Member("Enum", 2, struct {
             try py.systemError("Invalid validation context", .{});
         }
         const items: *Tuple = @ptrCast(self.validate_context.?);
-        const data = try items.index(value);
-        return data;
+        return try items.index(value);
     }
 
     pub inline fn readSlotStatic(self: *MemberBase, _: *Atom, data: usize) py.Error!?*Object {

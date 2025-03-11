@@ -460,12 +460,12 @@ pub const MemberBase = extern struct {
     }
 
     pub fn default_value_mode(self: *Self) ?*Object {
-        const ctx = if (self.default_context) |c| c else py.None();
+        const ctx = self.default_context orelse py.None();
         return @ptrCast(Tuple.packNewrefs(.{ py.None(), ctx }) catch null);
     }
 
     pub fn validate_mode(self: *Self) ?*Object {
-        const ctx = if (self.validate_context) |c| c else py.None();
+        const ctx = self.validate_context orelse py.None();
         return @ptrCast(Tuple.packNewrefs(.{ py.None(), ctx }) catch null);
     }
 
@@ -562,8 +562,8 @@ pub const MemberBase = extern struct {
         if (item_member.owner != null) {
             return py.typeError("Cannot reuse a member bound to another member", .{});
         }
-        item_member.owner = @ptrCast(self.newref());
-        py.xsetref(@ptrCast(&item_member.name), @ptrCast(name.newref()));
+        item_member.setName(name);
+        item_member.setOwner(@ptrCast(self));
     }
 
     pub fn unbindValidatorMember(self: *Self, item_member: *MemberBase) !void {
@@ -649,7 +649,7 @@ pub const MemberBase = extern struct {
 
     // Returns new reference
     pub fn cloneOrError(self: *Self) !*Self {
-        if (comptime @import("api.zig").debug_level == .verbose) {
+        if (comptime @import("api.zig").debug_level.clones) {
             try py.print("Member.clone('{s}')\n", .{self.name.?});
         }
         const cls = self.typeref();
@@ -658,6 +658,8 @@ pub const MemberBase = extern struct {
         result.info = self.info;
         if (self.name) |name| {
             result.name = name.newref();
+        } else {
+            result.name = undefined_str.?.newref();
         }
         if (self.owner) |o| {
             result.owner = o.newref();
@@ -693,9 +695,6 @@ pub const MemberBase = extern struct {
     // The impl can override per mode as needed.
     // Returns new reference
     pub inline fn default(self: *MemberBase, comptime impl: type, atom: *Atom) py.Error!*Object {
-        if (comptime @import("api.zig").debug_level == .verbose) {
-            try py.print("Member.default(name={?s}, atom: {}, mode: {}, context: {?} owner={?s})\n", .{self.name, atom,  self.info.default_mode, self.default_context, self.owner});
-        }
         switch (self.info.default_mode) {
             .static => {
                 if (comptime @hasDecl(impl, "defaultStatic")) {
@@ -742,9 +741,9 @@ pub const MemberBase = extern struct {
     }
 
     pub fn clear(self: *Self) c_int {
-//         if (comptime @import("api.zig").debug_level == .verbose) {
-//             py.print("Member.clear(name={?}, owner={?})\n", .{self.name, self.owner}) catch return -1;
-//         }
+        if (comptime @import("api.zig").debug_level.clears) {
+            py.print("Member.clear(name: {?s}, owner: {?s})\n", .{ self.name, self.owner }) catch return -1;
+        }
         py.clearAll(.{
             &self.name,
             &self.owner,
@@ -758,16 +757,16 @@ pub const MemberBase = extern struct {
 
     // Check if object is an atom_meta
     pub fn traverse(self: *Self, visit: py.visitproc, arg: ?*anyopaque) c_int {
-//         if (comptime @import("api.zig").debug_level == .verbose) {
-//             py.print("Member.traverse(name={?s}, owner: {?s}, meta: {?s}, default_context: {?s}, validate_context={?s}, coercer_context={?s})\n", .{
-//                 self.name,
-//                 self.owner,
-//                 self.metadata,
-//                 self.default_context,
-//                 self.validate_context,
-//                 self.coercer_context,
-//             }) catch return -1;
-//         }
+        if (comptime @import("api.zig").debug_level.traverse) {
+            py.print("Member.traverse(name: {?s}, owner: {?s}, meta: {?s}, default_context: {?s}, validate_context={?s}, coercer_context={?s})\n", .{
+                self.name,
+                self.owner,
+                self.metadata,
+                self.default_context,
+                self.validate_context,
+                self.coercer_context,
+            }) catch return -1;
+        }
         return py.visitAll(.{
             self.name,
             self.owner,
@@ -868,72 +867,49 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         // --------------------------------------------------------------------------
         // Returns new reference
         pub inline fn default(self: *Self, atom: *Atom) py.Error!*Object {
+            if (comptime @import("api.zig").debug_level.defaults) {
+                try py.print("{s}.default(name: {?s}, storage_mode: {s}, default_mode: {s}, atom: {})\n", .{ type_name, self.base.name, @tagName(storage_mode), @tagName(self.base.info.default_mode), atom });
+            }
             if (comptime @hasDecl(impl, "default")) {
                 return impl.default(@ptrCast(self), atom);
             }
             return self.base.default(impl, atom);
         }
 
-        // Default write slot implementation. It does not need to worry about discarding the old value but must
-        // return whether it stole a reference to value or borrowed it so the caller can know how to handle it.
-        pub inline fn writeSlot(self: *Self, atom: *Atom, slot: *?*Object, value: *Object) py.Error!Ownership {
-            if (comptime @import("api.zig").debug_level == .verbose) {
-                try py.print("{s}.writeSlot(name={?s}, storage_mode: {}, atom: {}, value: {?s})\n", .{type_name, self.base.name, storage_mode, atom,  value});
+        // Default getattr implementation provides normal slot behavior
+        // Returns new reference
+        pub inline fn getattr(self: *Self, atom: *Atom) py.Error!*Object {
+            if (comptime @hasDecl(impl, "getattr")) {
+                return impl.getattr(@ptrCast(self), atom);
             }
-            switch (comptime storage_mode) {
-                .pointer => {
-                    if (comptime @hasDecl(impl, "writeSlotPointer")) {
-                        return impl.writeSlotPointer(@ptrCast(self), atom, slot);
-                    }
-                    slot.* = value;
-                    return .stolen;
-                },
-                .static => {
-                    if (comptime !@hasDecl(impl, "writeSlotStatic")) {
-                        @compileError("member impl must provide a writeSlotStatic function if storage mode is static. Signature is `pub fn writeSlotStatic(self: *MemberBase, atom: *Atom, value: *Object) py.Error!usize`");
-                    }
-                    const ptr: *usize = @ptrCast(slot);
-                    const data_mask = self.base.slotDataMask();
-                    const set_mask = self.base.slotSetMask();
-                    const data = try impl.writeSlotStatic(@ptrCast(self), atom, value);
-                    const new_value = data_mask & (data << self.base.info.offset);
-                    // Mark the slot as set with the new data
-                    ptr.* = (ptr.* & ~data_mask) | new_value | set_mask;
-                    return .borrowed;
-                },
-                .none => {
-                    // unreachable;
-                    return .borrowed;
-                },
+            const ptr = try atom.slotPtr(@ptrCast(self));
+            if (try readSlot(@ptrCast(self), atom, ptr)) |v| {
+                return switch (comptime storage_mode) {
+                    .pointer => v.newref(),
+                    .static => v, // readSlot in static mode is always already a newref
+                    .none => unreachable,
+                };
             }
-        }
+            const default_value = try self.default(atom);
+            defer default_value.decref();
 
-        // Default delete slot implementation. It does not need to worry about discarding the old value
-        pub inline fn deleteSlot(self: *Self, atom: *Atom, slot: *?*Object) void {
-            if (comptime @import("api.zig").debug_level == .verbose) {
-                py.print("{s}.deleteSlot(name={?s}, storage_mode: {}, atom: {})\n", .{type_name, self.base.name, storage_mode, atom}) catch {};
-            }
-            switch (comptime storage_mode) {
-                .pointer => {
-                    slot.* = null;
-                },
-                .static => {
-                    // Clear the slot 'is set' bit
-                    // This makes the code treat it as "null"
-                    const ptr: *usize = @ptrCast(slot);
-                    const mask = self.base.slotSetMask();
-                    ptr.* &= ~mask;
-                },
-                .none => {},
-            }
+            // We must track whether the write took ownership of the default value
+            // becuse it is needed in notify create. If the writeSlot says it took ownership
+            // of the value then we do not need to decref it. If an error occurs it gets decref'd
+            const value = try self.validate(atom, py.None(), default_value);
+            var value_ownership: Ownership = .borrowed;
+            defer if (value_ownership == .borrowed) value.decref();
+            value_ownership = try writeSlot(@ptrCast(self), atom, ptr, value); // Default returns a new object
+            try self.base.notifyCreate(atom, value);
+            return value.newref();
         }
 
         // Default read slot implementation.
         // pointer storage mode must return borrowed reference
         // static storage mode always returns a new reference
         pub inline fn readSlot(self: *Self, atom: *Atom, slot: *?*Object) py.Error!?*Object {
-            if (comptime @import("api.zig").debug_level == .verbose) {
-                try py.print("{s}.readSlot(name={?s}, storage_mode: {}, atom: {})\n", .{type_name, self.base.name, storage_mode, atom});
+            if (comptime @import("api.zig").debug_level.reads) {
+                try py.print("{s}.readSlot(name: {?s}, storage_mode: {s}, atom: {})\n", .{ type_name, self.base.name, @tagName(storage_mode), atom });
             }
             switch (comptime storage_mode) {
                 .pointer => {
@@ -959,34 +935,6 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 .none => {},
             }
             return null;
-        }
-
-        // Default getattr implementation provides normal slot behavior
-        // Returns new reference
-        pub inline fn getattr(self: *Self, atom: *Atom) py.Error!*Object {
-            if (comptime @hasDecl(impl, "getattr")) {
-                return impl.getattr(@ptrCast(self), atom);
-            }
-            const ptr = try atom.slotPtr(@ptrCast(self));
-            if (try readSlot(@ptrCast(self), atom, ptr)) |v| {
-                if (comptime storage_mode == .pointer) {
-                    return v.newref();
-                } else {
-                    return v;
-                }
-            }
-            const default_value = try self.default(atom);
-            defer default_value.decref();
-
-            // We must track whether the write took ownership of the default value
-            // becuse it is needed in notify create. If the writeSlot says it took ownership
-            // of the value then we do not need to decref it. If an error occurs it gets decref'd
-            const value = try self.validate(atom, py.None(), default_value);
-            var value_ownership: Ownership = .borrowed;
-            defer if (value_ownership == .borrowed) value.decref();
-            value_ownership = try writeSlot(@ptrCast(self), atom, ptr, value); // Default returns a new object
-            try self.base.notifyCreate(atom, value);
-            return value.newref();
         }
 
         // Default setattr implementation provides normal slot behavior
@@ -1023,6 +971,40 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
             return; // Ok
         }
 
+        // Default write slot implementation. It does not need to worry about discarding the old value but must
+        // return whether it stole a reference to value or borrowed it so the caller can know how to handle it.
+        pub inline fn writeSlot(self: *Self, atom: *Atom, slot: *?*Object, value: *Object) py.Error!Ownership {
+            if (comptime @import("api.zig").debug_level.writes) {
+                try py.print("{s}.writeSlot(name: {?s}, storage_mode: {s}, atom: {}, value: {?s})\n", .{ type_name, self.base.name, @tagName(storage_mode), atom, value });
+            }
+            switch (comptime storage_mode) {
+                .pointer => {
+                    if (comptime @hasDecl(impl, "writeSlotPointer")) {
+                        return impl.writeSlotPointer(@ptrCast(self), atom, slot);
+                    }
+                    slot.* = value;
+                    return .stolen;
+                },
+                .static => {
+                    if (comptime !@hasDecl(impl, "writeSlotStatic")) {
+                        @compileError("member impl must provide a writeSlotStatic function if storage mode is static. Signature is `pub fn writeSlotStatic(self: *MemberBase, atom: *Atom, value: *Object) py.Error!usize`");
+                    }
+                    const ptr: *usize = @ptrCast(slot);
+                    const data_mask = self.base.slotDataMask();
+                    const set_mask = self.base.slotSetMask();
+                    const data = try impl.writeSlotStatic(@ptrCast(self), atom, value);
+                    const new_value = data_mask & (data << self.base.info.offset);
+                    // Mark the slot as set with the new data
+                    ptr.* = (ptr.* & ~data_mask) | new_value | set_mask;
+                    return .borrowed;
+                },
+                .none => {
+                    // unreachable;
+                    return .borrowed;
+                },
+            }
+        }
+
         // Default delattr implementation
         pub inline fn delattr(self: *Self, atom: *Atom) py.Error!void {
             if (comptime @hasDecl(impl, "delattr")) {
@@ -1037,6 +1019,26 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 defer old.decref();
                 deleteSlot(@ptrCast(self), atom, ptr);
                 try self.base.notifyDelete(atom, old);
+            }
+        }
+
+        // Default delete slot implementation. It does not need to worry about discarding the old value
+        pub inline fn deleteSlot(self: *Self, atom: *Atom, slot: *?*Object) void {
+            if (comptime @import("api.zig").debug_level.deletes) {
+                py.print("{s}.deleteSlot(name: {?s}, storage_mode: {s}, atom: {})\n", .{ type_name, self.base.name, @tagName(storage_mode), atom }) catch {};
+            }
+            switch (comptime storage_mode) {
+                .pointer => {
+                    slot.* = null;
+                },
+                .static => {
+                    // Clear the slot 'is set' bit
+                    // This makes the code treat it as "null"
+                    const ptr: *usize = @ptrCast(slot);
+                    const mask = self.base.slotSetMask();
+                    ptr.* &= ~mask;
+                },
+                .none => {},
             }
         }
 
@@ -1103,8 +1105,10 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 self.base.info.default_mode = .func;
                 py.xsetref(&self.base.default_context, default_factory.?.newref());
             } else if (py.notNone(default_context)) {
+                self.base.info.default_mode = .static;
                 py.xsetref(&self.base.default_context, default_context.?.newref());
             } else if (comptime @hasDecl(impl, "initDefault")) {
+                self.base.info.default_mode = .static;
                 py.xsetref(&self.base.default_context, try impl.initDefault());
             }
         }

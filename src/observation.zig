@@ -10,6 +10,7 @@ const Function = py.Function;
 const Method = py.Method;
 const package_name = @import("api.zig").package_name;
 const Atom = @import("atom.zig").Atom;
+const ChangeType = @import("observer_pool.zig").ChangeType;
 
 var change_types_str: ?*Str = null;
 var change_str: ?*Str = null;
@@ -36,6 +37,16 @@ pub const ObserveHandler = extern struct {
     // Type check the given object. This assumes the module was initialized
     pub fn check(obj: *const Object) bool {
         return obj.typeCheck(TypeObject.?);
+    }
+
+    // Internal api to create a new ObserveHandler
+    pub fn create(topic: *Str, func: *Function) !*ObserveHandler {
+        const self: *Self = @ptrCast(try Type.genericNew(TypeObject.?, null, null));
+        errdefer self.decref();
+        self.topics = try Tuple.packNewrefs(.{topic});
+        self.func = func.newref();
+        self.change_types = @intFromEnum(ChangeType.ANY);
+        return self;
     }
 
     pub fn init(self: *Self, args: *Tuple, kwargs: ?*Dict) c_int {

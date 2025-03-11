@@ -101,6 +101,31 @@ inline fn updateAtomBasesTypeSizes(bases: *Tuple, reset_size: usize, comptime ac
     }
 }
 
+fn checkDefaultSetter(dict: *Dict, member: *MemberBase) !void {
+    const member_default_str = try Str.new("_default_{s}", .{member.name.?.data()});
+    defer member_default_str.decref();
+    if (dict.get(@ptrCast(member_default_str))) |func| {
+        if (Function.check(func)) {
+            member.info.default_mode = .method;
+            py.xsetref(&member.default_context, func.newref());
+        }
+        // TODO: else should this throw an error?
+    }
+}
+
+fn checkObserveMethod(dict: *Dict, member: *MemberBase, observers: *List) !void {
+    const member_observe_str = try Str.new("_observe_{s}", .{member.name.?.data()});
+    defer member_observe_str.decref();
+    if (dict.get(@ptrCast(member_observe_str))) |func| {
+        if (Function.check(func)) {
+            const observer = try ObserveHandler.create(member.name.?, @ptrCast(func));
+            defer observer.decref();
+            try observers.append(@ptrCast(observer));
+        }
+        // TODO: else should this throw an error?
+    }
+}
+
 /// Info needed to compute the memory layout
 pub const MetaInfo = packed struct {
     // Number of members
@@ -166,8 +191,8 @@ pub const AtomMeta = extern struct {
             try py.typeError("AtomMeta's 3rd arg must be a dict", .{});
         }
 
-        if (comptime @import("api.zig").debug_level == .verbose) {
-            try py.print("AtomMeta.new({s}, '{s}')\n", .{meta.className(), name});
+        if (comptime @import("api.zig").debug_level.creates) {
+            try py.print("AtomMeta.new({s}, '{s}')\n", .{ meta.className(), name });
         }
 
         // Modify the bases
@@ -227,6 +252,10 @@ pub const AtomMeta = extern struct {
                 }
             } else if (Str.check(slots)) {
                 info.py_slots = 1;
+                if (slots.is(weakref_str)) {
+                    info.has_weakref = true;
+                    info.py_slots -|= 1; // weakref gets removed
+                }
             } else {
                 try py.typeError("__slots__ must be a tuple or str", .{});
             }
@@ -257,29 +286,15 @@ pub const AtomMeta = extern struct {
                     const member: *MemberBase = @ptrCast(entry.value);
                     member.setName(attr);
                     computeMemoryLayout(member, &info);
+                    try checkDefaultSetter(dict, member);
+                    try checkObserveMethod(dict, member, observers);
                     try members.set(@ptrCast(attr), @ptrCast(member));
-
-                    //                     try py.print("  member '{s}' index={} storage_mode={}\n", .{
-                    //                         attr.data(),
-                    //                         member.info.index,
-                    //                         member.info.storage_mode,
-                    //                     });
-
-                    const member_default_str = try Str.new("_default_{s}", .{attr.data()});
-                    defer member_default_str.decref();
-                    if (dict.get(@ptrCast(member_default_str))) |func| {
-                        if (Function.check(func)) {
-                            member.info.default_mode = .method;
-                            py.xsetref(&member.default_context, func.newref());
-                        }
-                        // TODO: else should this throw an error
-                    }
                 } else if (ObserveHandler.check(entry.value)) {
                     const observer: *ObserveHandler = @ptrCast(entry.value);
                     if (observer.func) |func| {
                         try observers.append(@ptrCast(observer));
                         // Replace the observe handler with the original function
-                        // It's safe to modify the value of dict while iterating
+                        // It's safe to modify the value of dict while iterating since the key is unchanged
                         try dict.set(@ptrCast(attr), @ptrCast(func));
                     }
                 } else if (DefaultSetter.check(entry.value)) {
@@ -295,6 +310,8 @@ pub const AtomMeta = extern struct {
                             new_member.info.default_mode = .static;
                             py.xsetref(&new_member.default_context, set_default.value.?.newref());
                             computeMemoryLayout(new_member, &info);
+                            try checkObserveMethod(dict, new_member, observers);
+                            // It's safe to modify the value of dict while iterating since the key is unchanged
                             try dict.set(@ptrCast(attr), @ptrCast(new_member));
                             break;
                         }
@@ -315,6 +332,8 @@ pub const AtomMeta = extern struct {
                 const new_member = try member.cloneOrError();
                 defer new_member.decref();
                 computeMemoryLayout(new_member, &info);
+                try checkDefaultSetter(dict, new_member);
+                try checkObserveMethod(dict, new_member, observers);
                 try dict.set(@ptrCast(new_member.name.?), @ptrCast(new_member));
                 try members.set(@ptrCast(new_member.name.?), @ptrCast(new_member));
             }
@@ -350,7 +369,7 @@ pub const AtomMeta = extern struct {
         }
         //py.c.PyType_Modified(@ptrCast(cls));
         cls.pool_manager = try PoolManager.new(py.allocator);
-        try cls.initStaticObservers(observers, members);
+        try cls.initStaticObservers(observers, members, bases);
         return @ptrCast(cls);
     }
 
@@ -486,7 +505,20 @@ pub const AtomMeta = extern struct {
         self.setTypeSize(calculateTypeSize(self.info, true));
     }
 
-    pub fn initStaticObservers(self: *Self, observers: *List, members: *Dict) !void {
+    pub fn initStaticObservers(self: *Self, observers: *List, members: *Dict, bases: *Tuple) !void {
+        const num_bases: usize = @intCast(bases.sizeUnchecked());
+        for (0..num_bases) |i| {
+            const item = bases.getUnsafe(i).?;
+            if (AtomMeta.check(item)) {
+                const base: *AtomMeta = @ptrCast(item);
+                if (base.static_observers) |inherited_pool| {
+                    if (try self.staticObserverPool()) |pool| {
+                        try pool.addAllFromPool(py.allocator, inherited_pool);
+                    }
+                }
+            }
+        }
+
         var pos: usize = 0;
         while (observers.next(&pos)) |item| {
             std.debug.assert(ObserveHandler.check(item));
@@ -594,7 +626,7 @@ pub const AtomMeta = extern struct {
     // Type definition
     // --------------------------------------------------------------------------
     pub fn clear(self: *Self) c_int {
-        if (comptime @import("api.zig").debug_level == .verbose) {
+        if (comptime @import("api.zig").debug_level.clears) {
             py.print("AtomMeta.clear({s})\n", .{Type.className(@ptrCast(self))}) catch return -1;
         }
 

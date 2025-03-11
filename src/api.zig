@@ -14,11 +14,20 @@ const observer_pool = @import("observer_pool.zig");
 const modes = @import("modes.zig");
 pub const package_name = "zatom";
 
-pub const DebugLevel = enum {
-    off,
-    verbose,
+pub const DebugLevel = struct {
+    creates: bool = false,
+    clears: bool = false,
+    traverse: bool = false,
+    clones: bool = false,
+    defaults: bool = false,
+    reads: bool = false,
+    writes: bool = false,
+    deletes: bool = false,
 };
-pub const debug_level: DebugLevel = .verbose;
+pub const debug_level = DebugLevel{
+    //.defaults=true, .reads=true, .writes=true, .deletes=true
+    //.traverse = true,
+};
 
 fn modexec(mod: *py.Module) !c_int {
     try member.initModule(mod);

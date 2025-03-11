@@ -191,6 +191,19 @@ def test_atom_weakrefs():
     assert ref() is None
 
 
+def test_atom_weakref_slots():
+    class A(Atom):
+        __slots__ = "__weakref__"
+        a = Str()
+
+    a = A()
+    ref = weakref.ref(a)
+    assert ref() is a
+    del a
+    gc.collect()
+    assert ref() is None
+
+
 def test_multiple_subclass():
     class Obj(Atom):
         id = Int()

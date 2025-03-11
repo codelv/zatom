@@ -102,10 +102,11 @@ pub const CoercedMember = Member("Coerced", 18, struct {
                 // Try to coerce
                 if (self.coercer_context) |coercer| {
                     const coerced = try coercer.callArgs(.{new});
-                    defer coerced.decref();
+                    errdefer coerced.decref();
                     if (try coerced.isInstance(kind)) {
-                        return coerced.newref();
+                        return coerced;
                     }
+                    coerced.decref();
                 }
                 if (py.Tuple.check(kind)) {
                     const types_str = try kind.str();

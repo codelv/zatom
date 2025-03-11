@@ -114,7 +114,6 @@ pub const InstanceMember = Member("Instance", 4, struct {
         }
         try py.systemError("Invalid validation context", .{});
         unreachable;
-
     }
 });
 

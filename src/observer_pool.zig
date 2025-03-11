@@ -30,6 +30,14 @@ pub const ObserverInfo = struct {
     pub fn enabled(self: *ObserverInfo, change_types: u8) bool {
         return self.change_types & change_types != 0;
     }
+
+    // Create a clone of the Observer
+    pub fn clone(self: ObserverInfo) ObserverInfo {
+        return ObserverInfo{
+            .observer = self.observer.newref(),
+            .change_types = self.change_types,
+        };
+    }
 };
 
 pub const PoolGuard = struct {
@@ -143,6 +151,30 @@ pub const ObserverPool = struct {
             }
         }
         return false;
+    }
+
+    // Add all observers
+    pub fn addAllFromPool(self: *ObserverPool, allocator: std.mem.Allocator, other: *ObserverPool) py.Error!void {
+        if (self.guard != null or other.guard != null) {
+            // TODO: add later?
+            return py.systemError("cannot add on guarded pool", .{});
+        }
+        var topics_it = other.map.iterator();
+        while (topics_it.next()) |entry| {
+            const topic_hash = entry.key_ptr.*;
+            if (!self.map.contains(topic_hash)) {
+                self.map.put(allocator, topic_hash, ObserverMap{}) catch return py.memoryError();
+            }
+            const observer_map = self.map.getPtr(topic_hash).?;
+            var map_it = entry.value_ptr.iterator();
+            // Copy all observers
+            while (map_it.next()) |observer| {
+                const observer_hash = observer.key_ptr.*;
+                if (!observer_map.contains(observer_hash)) {
+                    observer_map.put(allocator, observer_hash, observer.value_ptr.clone()) catch return py.memoryError();
+                }
+            }
+        }
     }
 
     pub fn addObserver(self: *ObserverPool, allocator: std.mem.Allocator, topic: *Str, observer: *Object, change_types: u8) py.Error!void {

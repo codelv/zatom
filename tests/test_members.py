@@ -262,6 +262,26 @@ def test_coerced():
     with pytest.raises(ValueError):
         a.count = "x"
 
+def test_coerced_subclass():
+    class Size(Atom):
+        x = Int()
+        y = Int()
+        def __init__(self, x: int=0, y: int=0):
+            super().__init__(x=x, y=y)
+
+    class A(Atom):
+        size = Coerced(Size, (-1, -1))
+
+    class B(A):
+        checked = Bool()
+
+        def _default_size(self):
+            return Size(320, 240)
+
+
+    b = B()
+    assert b.size.x == 320
+    assert b.size.y == 240
 
 def test_typed():
     class A(Atom):
@@ -313,6 +333,7 @@ def test_enum():
         option = Enum(1, 2, 3, 4, 5, default=3)
         alt = Enum("one", "two")
         other_alt = alt("two")  # Calling an enum creates a copy with a new default
+        single = Enum("fixed")
 
     assert A.option.index == 0
     assert A.option.offset == 0
