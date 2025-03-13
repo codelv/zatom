@@ -102,8 +102,14 @@ pub const TypedSet = extern struct {
         const self: *TypedSet = @ptrCast(try TypeObject.?.callArgs(.{}));
         errdefer self.decref();
         self.validate_context = try Tuple.packNewrefs(.{ validate_member, atom });
-        if (self.ior(items) == null) {
-            return error.PyError;
+
+        const iter = try items.iter();
+        defer iter.decref();
+        while (try iter.next()) |item| {
+            defer item.decref();
+            const new = try validate_member.validate(atom, py.None(), item);
+            defer new.decref();
+            try self.base.add(new);
         }
         return @ptrCast(self);
     }
