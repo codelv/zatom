@@ -74,10 +74,10 @@ pub const CoercedMember = Member("Coerced", 18, struct {
             if (!coercer.?.isCallable()) {
                 return py.typeError("Coerced member's coercer must be callable, got: {s}", .{coercer.?.typeName()});
             }
-            self.setCoercerContext(.yes, coercer.?);
+            self.setCoercerContext(.yes, coercer.?.newref());
         } else {
             // It's possbile that there is no init args which could be a problem
-            self.setCoercerContext(.yes, cls);
+            self.setCoercerContext(.yes, cls.newref());
         }
     }
 
