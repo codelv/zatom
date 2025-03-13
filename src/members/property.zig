@@ -35,7 +35,7 @@ pub const PropertyMember = Member("Property", 19, struct {
         if (cached != 0 and py.notNone(fset)) {
             try py.typeError("Cached properties are read-only, but a setter was specified", .{});
         }
-        py.xsetref(&self.validate_context, @ptrCast(try Tuple.packNewrefs(.{
+        self.setValidateContext(.default, @ptrCast(try Tuple.packNewrefs(.{
             fget orelse py.None(),
             fset orelse py.None(),
             fdel orelse py.None(),
@@ -60,6 +60,9 @@ pub const PropertyMember = Member("Property", 19, struct {
     }
 
     pub inline fn getattr(self: *MemberBase, atom: *Atom) py.Error!*Object {
+        if (self.validate_context == null) {
+            try py.systemError("Invalid validate context", .{});
+        }
         if (self.info.storage_mode == .pointer) {
             const ptr = try atom.slotPtr(@ptrCast(self));
             if (ptr.* == null) {
@@ -71,6 +74,9 @@ pub const PropertyMember = Member("Property", 19, struct {
     }
 
     pub inline fn setattr(self: *MemberBase, atom: *Atom, value: *Object) py.Error!void {
+        if (self.validate_context == null) {
+            try py.systemError("Invalid validate context", .{});
+        }
         const tuple: *Tuple = @ptrCast(self.validate_context.?);
         const fset = try tuple.get(1);
         if (fset.isNone()) {
@@ -85,6 +91,9 @@ pub const PropertyMember = Member("Property", 19, struct {
     }
 
     pub inline fn delattr(self: *MemberBase, atom: *Atom) py.Error!void {
+        if (self.validate_context == null) {
+            try py.systemError("Invalid validate context", .{});
+        }
         const tuple: *Tuple = @ptrCast(self.validate_context.?);
         const fdel = try tuple.get(2);
         if (fdel.isNone()) {
@@ -99,18 +108,30 @@ pub const PropertyMember = Member("Property", 19, struct {
     }
 
     pub fn get_fget(self: *PropertyMember) ?*Object {
-        const tuple: *Tuple = @ptrCast(self.base.validate_context.?);
-        return tuple.getUnsafe(0).?.newref();
+        if (self.base.validate_context) |context| {
+            const tuple: *Tuple = @ptrCast(context);
+            const f = tuple.get(0) catch return null;
+            return f.newref();
+        }
+        return py.returnNone();
     }
 
     pub fn get_fset(self: *PropertyMember) ?*Object {
-        const tuple: *Tuple = @ptrCast(self.base.validate_context.?);
-        return tuple.getUnsafe(1).?.newref();
+        if (self.base.validate_context) |context| {
+            const tuple: *Tuple = @ptrCast(context);
+            const f = tuple.get(1) catch return null;
+            return f.newref();
+        }
+        return py.returnNone();
     }
 
     pub fn get_fdel(self: *PropertyMember) ?*Object {
-        const tuple: *Tuple = @ptrCast(self.base.validate_context.?);
-        return tuple.getUnsafe(2).?.newref();
+        if (self.base.validate_context) |context| {
+            const tuple: *Tuple = @ptrCast(context);
+            const f = tuple.get(2) catch return null;
+            return f.newref();
+        }
+        return py.returnNone();
     }
 
     pub fn get_cached(self: *PropertyMember) ?*Object {
@@ -121,6 +142,9 @@ pub const PropertyMember = Member("Property", 19, struct {
         if (!func.isCallable()) {
             return py.typeErrorObject(null, "Getter must be callable", .{});
         }
+        if (self.base.validate_context == null) {
+            return py.systemErrorObject(null, "Invalid validate context", .{});
+        }
         const tuple: *Tuple = @ptrCast(self.base.validate_context.?);
         tuple.set(0, func.newref()) catch return null;
         return func.newref();
@@ -130,6 +154,9 @@ pub const PropertyMember = Member("Property", 19, struct {
         if (!func.isCallable()) {
             return py.typeErrorObject(null, "Setter must be callable", .{});
         }
+        if (self.base.validate_context == null) {
+            return py.systemErrorObject(null, "Invalid validate context", .{});
+        }
         const tuple: *Tuple = @ptrCast(self.base.validate_context.?);
         tuple.set(1, func.newref()) catch return null;
         return func.newref();
@@ -138,6 +165,9 @@ pub const PropertyMember = Member("Property", 19, struct {
     pub fn set_deleter(self: *PropertyMember, func: *Object) ?*Object {
         if (!func.isCallable()) {
             return py.typeErrorObject(null, "Deleter must be callable", .{});
+        }
+        if (self.base.validate_context == null) {
+            return py.systemErrorObject(null, "Invalid validate context", .{});
         }
         const tuple: *Tuple = @ptrCast(self.base.validate_context.?);
         tuple.set(2, func.newref()) catch return null;

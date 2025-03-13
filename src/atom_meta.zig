@@ -63,13 +63,13 @@ pub fn computeMemoryLayout(
                 info.last_static_slot = info.slot_count;
                 info.has_static_slot = true;
                 member.info.offset = 0;
-                info.slot_offset = @truncate(bitsize); // Reset slot offset
+                info.slot_offset = @intCast(bitsize); // Reset slot offset
                 info.slot_count += 1; // This consumes a slot
             } else {
                 // Reuse the space from the last static slot
                 member.info.index = @intCast(info.last_static_slot);
                 member.info.offset = @intCast(info.slot_offset);
-                info.slot_offset +|= @truncate(bitsize);
+                info.slot_offset +|= @intCast(bitsize);
             }
         },
         .none => {}, // No-op
@@ -101,13 +101,12 @@ inline fn updateAtomBasesTypeSizes(bases: *Tuple, reset_size: usize, comptime ac
     }
 }
 
-fn checkDefaultSetter(dict: *Dict, member: *MemberBase) !void {
+fn checkDefaultMethod(dict: *Dict, member: *MemberBase) !void {
     const member_default_str = try Str.new("_default_{s}", .{member.name.?.data()});
     defer member_default_str.decref();
     if (dict.get(@ptrCast(member_default_str))) |func| {
         if (Function.check(func)) {
-            member.info.default_mode = .method;
-            py.xsetref(&member.default_context, func.newref());
+            member.setDefaultContext(.method, func.newref());
         }
         // TODO: else should this throw an error?
     }
@@ -218,9 +217,6 @@ pub const AtomMeta = extern struct {
                 found_atom = true;
                 const atom_base: *AtomMeta = @ptrCast(base);
                 if (atom_base.atom_members) |array| {
-                    //                     for (array.items) |member| {
-                    //                         try inherited_members.append(@ptrCast(member));
-                    //                     }
                     inherited_members.appendSlice(py.allocator, array.items) catch {
                         try py.memoryError();
                     };
@@ -272,8 +268,6 @@ pub const AtomMeta = extern struct {
             try dict.set(@ptrCast(slots_str.?), @ptrCast(slots));
         }
 
-        //const num_inherited = try inherited_members.size();
-
         {
             var pos: isize = 0;
             while (dict.next(&pos)) |entry| {
@@ -286,7 +280,7 @@ pub const AtomMeta = extern struct {
                     const member: *MemberBase = @ptrCast(entry.value);
                     member.setName(attr);
                     computeMemoryLayout(member, &info);
-                    try checkDefaultSetter(dict, member);
+                    try checkDefaultMethod(dict, member);
                     try checkObserveMethod(dict, member, observers);
                     try members.set(@ptrCast(attr), @ptrCast(member));
                 } else if (ObserveHandler.check(entry.value)) {
@@ -302,13 +296,11 @@ pub const AtomMeta = extern struct {
                     var found = false;
 
                     for (inherited_members.items) |member| {
-                        //const member: *MemberBase = @ptrCast(inherited_members.getUnsafe(i).?);
                         if (attr.is(member.name)) {
                             found = true;
                             const new_member = try member.cloneOrError();
                             defer new_member.decref();
-                            new_member.info.default_mode = .static;
-                            py.xsetref(&new_member.default_context, set_default.value.?.newref());
+                            new_member.setDefaultContext(.static, set_default.value.?.newref());
                             computeMemoryLayout(new_member, &info);
                             try checkObserveMethod(dict, new_member, observers);
                             // It's safe to modify the value of dict while iterating since the key is unchanged
@@ -325,14 +317,13 @@ pub const AtomMeta = extern struct {
             }
             // TODO: Unfortunately this adds them to the end
             for (inherited_members.items) |member| {
-                //const member: *MemberBase = @ptrCast(inherited_members.getUnsafe(i).?);
                 if (dict.get(@ptrCast(member.name.?)) != null) {
                     continue; // Member redefined
                 }
                 const new_member = try member.cloneOrError();
                 defer new_member.decref();
                 computeMemoryLayout(new_member, &info);
-                try checkDefaultSetter(dict, new_member);
+                try checkDefaultMethod(dict, new_member);
                 try checkObserveMethod(dict, new_member, observers);
                 try dict.set(@ptrCast(new_member.name.?), @ptrCast(new_member));
                 try members.set(@ptrCast(new_member.name.?), @ptrCast(new_member));
@@ -420,10 +411,7 @@ pub const AtomMeta = extern struct {
         if (!Str.check(name)) {
             return py.typeErrorObject(null, "Invalid arguments: Signature is get_member(name: str)", .{});
         }
-        if (self.getMember(@ptrCast(name))) |member| {
-            return @ptrCast(member.newref());
-        }
-        return py.returnNone();
+        return py.returnOptional(self.getMember(@ptrCast(name)));
     }
 
     pub fn get_slot_count(self: *Self) ?*Int {
@@ -437,6 +425,9 @@ pub const AtomMeta = extern struct {
         const name: *Str = @ptrCast(args[0]);
         // TODO: Check if string is interned
         const member: *MemberBase = @ptrCast(args[1]);
+        if (member.owner != null) {
+            return py.typeErrorObject(null, "Cannot add member owned by another object", .{});
+        }
         self.setAttr(name, @ptrCast(member)) catch return null;
 
         if (self.atom_members) |members| {
@@ -463,8 +454,10 @@ pub const AtomMeta = extern struct {
             member.setOwner(@ptrCast(self));
             const old_slot_count = self.info.slot_count;
             computeMemoryLayout(member, &self.info);
-            if (self.info.slot_count > old_slot_count) {
-                self.updateTypeSize();
+            if (comptime Atom.slot_type == .inlined) {
+                if (self.info.slot_count > old_slot_count) {
+                    self.updateTypeSize();
+                }
             }
         } else {
             return py.typeErrorObject(null, "TODO: Add member to empty atom", .{});

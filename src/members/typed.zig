@@ -36,17 +36,14 @@ pub const TypedMember = Member("Typed", 16, struct {
         if (!Type.check(kind)) {
             return py.typeError("kind must be a type", .{});
         }
-        py.xsetref(&self.validate_context, kind.newref());
+        self.setValidateContext(.default, kind.newref());
 
         if (factory != null and !factory.?.isNone()) {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
-            self.info.default_mode = .func;
-            py.xsetref(&self.default_context, factory.?.newref());
+            self.setDefaultContext(.func, factory.?.newref());
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
-            self.info.default_mode = .func;
-
             const partial_kwargs: ?*Dict = blk: {
                 if (init_kwargs) |v| {
                     if (Dict.check(v)) {
@@ -69,9 +66,9 @@ pub const TypedMember = Member("Typed", 16, struct {
                 break :blk try Tuple.packNewrefs(.{kind});
             };
             defer partial_args.decref();
-            py.xsetref(&self.default_context, try partial.?.call(partial_args, partial_kwargs));
+            self.setDefaultContext(.func, try partial.?.call(partial_args, partial_kwargs));
         } else {
-            py.xsetref(&self.default_context, py.returnNone());
+            self.setDefaultContext(.static, py.returnNone());
         }
 
         // If a factory or init args were provided set to to not optional
@@ -97,7 +94,7 @@ pub const TypedMember = Member("Typed", 16, struct {
     }
 
     pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
-        if (new.isNone() and self.info.optional) {
+        if (self.info.optional and new.isNone()) {
             return new.newref(); // Ok
         }
         if (self.validate_context) |context| {
@@ -136,17 +133,14 @@ pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
         if (!resolve_func.isCallable()) {
             return py.typeError("resolve must be a callable that returns the type", .{});
         }
-        py.xsetref(&self.validate_context, resolve_func.newref());
+        self.setValidateContext(.default, resolve_func.newref());
 
         if (factory != null and !factory.?.isNone()) {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
-            self.info.default_mode = .func;
-            py.xsetref(&self.default_context, factory.?.newref());
+            self.setDefaultContext(.func, factory.?.newref());
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
-            self.info.default_mode = .func;
-
             const partial_kwargs: *Object = blk: {
                 if (init_kwargs) |v| {
                     if (Dict.check(v)) {
@@ -169,9 +163,9 @@ pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
                 break :blk py.None();
             };
             // Make a tuple of (args, kwargs) to call with the resolved type
-            py.xsetref(&self.default_context, @ptrCast(try Tuple.packNewrefs(.{ partial_args, partial_kwargs })));
+            self.setDefaultContext(.func, @ptrCast(try Tuple.packNewrefs(.{ partial_args, partial_kwargs })));
         } else {
-            py.xsetref(&self.default_context, py.returnNone());
+            self.setDefaultContext(.static, py.returnNone());
         }
 
         // If a factory or init args were provided set to to not optional
@@ -200,16 +194,16 @@ pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
         if (py.notNone(self.default_context) and Tuple.check(self.default_context.?)) {
             const tuple: *Tuple = @ptrCast(self.default_context.?);
             // These may be none
-            const args = tuple.getUnsafe(0).?;
-            const kwargs = tuple.getUnsafe(1).?;
+            const args = try tuple.get(0);
+            const kwargs = try tuple.get(1);
             const new_args = if (args.isNone()) try Tuple.packNewrefs(.{kind}) else try Tuple.prepend(@ptrCast(args), kind);
             defer new_args.decref();
-            py.xsetref(&self.default_context, try partial.?.call(new_args, if (kwargs.isNone()) null else @ptrCast(kwargs)));
+            self.setDefaultContext(.func, try partial.?.call(new_args, if (kwargs.isNone()) null else @ptrCast(kwargs)));
         }
 
         // Replace the resolver with the kind
-        py.xsetref(&self.validate_context, kind.newref());
         self.info.resolved = true;
+        self.setValidateContext(.default, kind.newref());
     }
 
     pub fn default(self: *MemberBase, atom: *Atom) !*Object {
@@ -220,7 +214,7 @@ pub const ForwardTypedMember = Member("ForwardTyped", 17, struct {
     }
 
     pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
-        if (new.isNone() and self.info.optional) {
+        if (self.info.optional and new.isNone()) {
             return new.newref(); // Ok
         }
         if (!self.info.resolved) {

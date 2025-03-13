@@ -16,7 +16,7 @@ var neg_inf_str: ?*py.Str = null;
 // Does no validation at all
 pub const ValueMember = Member("Value", 7, struct {
     pub const observable: Observable = .maybe;
-    pub inline fn initDefault() !?*Object {
+    pub inline fn initDefault() !*Object {
         return py.returnNone();
     }
 
@@ -47,7 +47,7 @@ pub const BoolMember = Member("Bool", 9, struct {
     pub const storage_mode: StorageMode = .static;
     pub const default_bitsize = 1;
 
-    pub inline fn initDefault() !?*Object {
+    pub inline fn initDefault() !*Object {
         return py.returnFalse();
     }
 
@@ -69,7 +69,7 @@ pub const BoolMember = Member("Bool", 9, struct {
 });
 
 pub const IntMember = Member("Int", 10, struct {
-    pub inline fn initDefault() !?*Object {
+    pub inline fn initDefault() !*Object {
         return @ptrCast(try py.Int.new(0));
     }
     pub inline fn validate(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
@@ -82,7 +82,7 @@ pub const IntMember = Member("Int", 10, struct {
 });
 
 pub const FloatMember = Member("Float", 11, struct {
-    pub inline fn initDefault() !?*Object {
+    pub inline fn initDefault() !*Object {
         return @ptrCast(try py.Float.new(0.0));
     }
     pub inline fn coerce(self: *MemberBase, atom: *Atom, _: *Object, new: *Object) py.Error!*Object {
@@ -98,7 +98,7 @@ pub const FloatMember = Member("Float", 11, struct {
 });
 
 pub const StrMember = Member("Str", 12, struct {
-    pub inline fn initDefault() !?*Object {
+    pub inline fn initDefault() !*Object {
         return @ptrCast(empty_str.?.newref());
     }
 
@@ -112,7 +112,7 @@ pub const StrMember = Member("Str", 12, struct {
 });
 
 pub const BytesMember = Member("Bytes", 13, struct {
-    pub inline fn initDefault() !?*Object {
+    pub inline fn initDefault() !*Object {
         return @ptrCast(empty_bytes.?.newref());
     }
 
@@ -139,18 +139,16 @@ pub const ConstantMember = Member("Constant", 19, struct {
         try py.parseTupleAndKeywords(args, kwargs, "|OOO", @ptrCast(&kwlist), .{ &default, &factory, &kind });
         if (py.notNone(kind)) {
             try self.validateTypeOrTupleOfTypes(kind.?);
-            py.xsetref(&self.validate_context, kind.?.newref());
+            self.setValidateContext(.default, kind.?.newref());
         }
 
         if (py.notNone(factory)) {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
-            self.info.default_mode = .func;
-            py.xsetref(&self.default_context, factory.?.newref());
+            self.setDefaultContext(.func, factory.?.newref());
         } else {
-            self.info.default_mode = .static;
-            py.xsetref(&self.default_context, py.returnOptional(default));
+            self.setDefaultContext(.static, py.returnOptional(default));
         }
     }
 
@@ -214,20 +212,22 @@ pub const RangeMember = Member("Range", 20, struct {
             }
         }
 
-        py.xsetref(&self.validate_context, @ptrCast(try py.Tuple.packNewrefs(.{
-            low orelse py.None(),
-            high orelse py.None(),
-        })));
+        // If either are set then define the context
+        if (py.notNone(low) or py.notNone(high)) {
+            self.setValidateContext(.default, @ptrCast(try py.Tuple.packNewrefs(.{
+                low orelse py.None(),
+                high orelse py.None(),
+            })));
+        }
 
-        self.info.default_mode = .static;
         if (py.notNone(value)) {
-            py.xsetref(&self.default_context, @ptrCast(value.?.newref()));
+            self.setDefaultContext(.static, @ptrCast(value.?.newref()));
         } else if (py.notNone(low)) {
-            py.xsetref(&self.default_context, low.?.newref());
+            self.setDefaultContext(.static, low.?.newref());
         } else if (py.notNone(high)) {
-            py.xsetref(&self.default_context, high.?.newref());
+            self.setDefaultContext(.static, high.?.newref());
         } else {
-            py.xsetref(&self.default_context, @ptrCast(try py.Int.new(0)));
+            self.setDefaultContext(.static, @ptrCast(try py.Int.new(0)));
         }
     }
 
@@ -254,8 +254,7 @@ pub const RangeMember = Member("Range", 20, struct {
             }
             return new.newref();
         }
-        try py.systemError("Invalid validation context", .{});
-        unreachable;
+        return new.newref(); // No range defined
     }
 });
 
@@ -312,22 +311,25 @@ pub const FloatRangeMember = Member("FloatRange", 21, struct {
             }
         }
         self.info.coerce = !strict;
-        self.info.default_mode = .static;
-        py.xsetref(&self.validate_context, @ptrCast(try py.Tuple.packNewrefs(.{ low_value, high_value })));
+        // Only set if either are defined
+        if (py.notNone(low) or py.notNone(high)) {
+            self.setValidateContext(.default, @ptrCast(try py.Tuple.packNewrefs(.{ low_value, high_value })));
+        }
+
         if (py.notNone(value)) {
             if (py.Float.check(value.?)) {
-                py.xsetref(&self.default_context, value.?.newref());
+                self.setDefaultContext(.static, value.?.newref());
             } else if (!strict and py.Int.check(value.?)) {
-                py.xsetref(&self.default_context, @ptrCast(try py.Float.fromInt(@ptrCast(value.?))));
+                self.setDefaultContext(.static, @ptrCast(try py.Float.fromInt(@ptrCast(value.?))));
             } else {
                 return py.typeError("value must be an float or None", .{});
             }
         } else if (py.notNone(low)) {
-            py.xsetref(&self.default_context, @ptrCast(low_value.newref()));
+            self.setDefaultContext(.static, @ptrCast(low_value.newref()));
         } else if (py.notNone(high)) {
-            py.xsetref(&self.default_context, @ptrCast(high_value.newref()));
+            self.setDefaultContext(.static, @ptrCast(high_value.newref()));
         } else {
-            py.xsetref(&self.default_context, @ptrCast(try py.Float.new(0.0)));
+            self.setDefaultContext(.static, @ptrCast(try py.Float.new(0.0)));
         }
     }
 
@@ -364,8 +366,7 @@ pub const FloatRangeMember = Member("FloatRange", 21, struct {
             }
             return coerced;
         }
-        try py.systemError("Invalid validation context", .{});
-        unreachable;
+        return new.newref(); // No range defined
     }
 });
 

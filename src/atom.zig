@@ -60,8 +60,8 @@ pub const Atom = extern struct {
         if (!AtomMeta.check(@ptrCast(cls))) {
             return py.typeErrorObject(null, "atom meta", .{});
         }
-        const self: *Self = @ptrCast(cls.genericNew(args, kwargs) catch return null);
         const meta: *AtomMeta = @ptrCast(cls);
+        const self: *Self = @ptrCast(cls.genericNew(args, kwargs) catch return null);
         self.info.slot_count = meta.info.slot_count;
         if (comptime slot_type == .pointer) {
             const byte_count = self.info.slot_count * @sizeOf(*Object);
@@ -375,17 +375,19 @@ pub const Atom = extern struct {
                     @setRuntimeSafety(false);
                     const slot = self.slots[member.info.index];
                     if (comptime @import("api.zig").debug_level.traverse) {
-                        py.print("Atom.traverse({s}, member=", .{self.typeName()}) catch return -1;
-                        py.print("(name: {?s}, info: {}, owner: {?s}, meta: {?s}, default_context: {?s}, validate_context: {?s}, coercer_context: {?s})", .{
-                            member.name,
-                            member.info,
-                            member.owner,
-                            member.metadata,
-                            member.default_context,
-                            member.validate_context,
-                            member.coercer_context,
-                        }) catch return -1;
-                        py.print(", slot: '{?s}')\n", .{slot}) catch return -1;
+                        if (@import("api.zig").debug_level.matches(member.name)) {
+                            py.print("Atom.traverse({s}, member=", .{self}) catch return -1;
+                            py.print("(name: {?s}, info: {}, owner: {?s}, meta: {?s}, default_context: {?s}, validate_context: {?s}, coercer_context: {?s})", .{
+                                member.name,
+                                member.info,
+                                member.owner,
+                                member.metadata,
+                                member.default_context,
+                                member.validate_context,
+                                member.coercer_context,
+                            }) catch return -1;
+                            py.print(", slot: '{?s}')\n", .{slot}) catch return -1;
+                        }
                     }
                     const r = py.visit(slot, visit, arg);
                     if (r != 0)

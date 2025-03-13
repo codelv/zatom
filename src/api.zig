@@ -23,10 +23,21 @@ pub const DebugLevel = struct {
     reads: bool = false,
     writes: bool = false,
     deletes: bool = false,
+    name_filter: ?[:0]const u8 = null,
+
+    pub fn matches(self: DebugLevel, name: ?*py.Str) bool {
+        if (self.name_filter) |f| {
+            if (name) |n| {
+                return std.mem.eql(u8, n.data(), f);
+            }
+        }
+        return true;
+    }
 };
 pub const debug_level = DebugLevel{
-    //.defaults=true, .reads=true, .writes=true, .deletes=true
-    //.traverse = true,
+    //.defaults=true, .reads=true, .writes=true, .deletes=true,
+    //.traverse=true,
+    //.name_filter="icon_size",
 };
 
 fn modexec(mod: *py.Module) !c_int {

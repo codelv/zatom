@@ -41,6 +41,7 @@ pub const StorageMode = enum(u2) {
 pub const Ownership = enum(u1) { stolen = 0, borrowed = 1 };
 pub const DefaultMode = enum(u2) { static = 0, func = 1, method = 2, method_name = 3 };
 pub const ValidateMode = enum(u2) { default = 0, call_old_new = 1, call_name_old_new = 2, call_object_old_new = 3 };
+pub const CoerceMode = enum(u1) { no = 0, yes = 1 };
 pub const Observable = enum(u2) { no = 0, yes = 1, maybe = 2 };
 
 pub const MemberInfo = packed struct {
@@ -60,7 +61,7 @@ pub const MemberInfo = packed struct {
 
 // Base Member class
 pub const MemberBase = extern struct {
-    // Reference to the type. This is set in ready
+    // Reference to the type. This is set in Fready
     pub var TypeObject: ?*Type = null;
     const Self = @This();
 
@@ -252,6 +253,9 @@ pub const MemberBase = extern struct {
     }
 
     pub fn do_default_value(self: *Self, atom: *Atom) ?*Object {
+        if (comptime @import("api.zig").debug_level.defaults) {
+            py.print("Member.do_default_value(member:{}, atom: {})\n", .{ self, atom }) catch return null;
+        }
         @setEvalBranchQuota(10000);
         inline for (all_modules) |mod| {
             if (comptime @hasDecl(mod, "all_members")) {
@@ -283,31 +287,27 @@ pub const MemberBase = extern struct {
                 if (!context.isCallable()) {
                     return py.typeErrorObject(null, "Context must be callable for mode {}", .{mode});
                 }
-                self.info.default_mode = .func;
-                py.xsetref(&self.default_context, context.newref());
+                self.setDefaultContext(.func, context.newref());
             },
             .CallObject_Object => {
                 if (!context.isCallable()) {
                     return py.typeErrorObject(null, "Context must be callable for mode {}", .{mode});
                 }
-                self.info.default_mode = .method;
-                py.xsetref(&self.default_context, context.newref());
+                self.setDefaultContext(.method, context.newref());
             },
             .CallObject_ObjectName => {
                 if (!context.isCallable()) {
                     return py.typeErrorObject(null, "Context must be callable for mode {}", .{mode});
                 }
-                self.info.default_mode = .method_name;
-                py.xsetref(&self.default_context, context.newref());
+                self.setDefaultContext(.method_name, context.newref());
             },
             .MemberMethod_Object => {
                 const member_method = self.getAttr(@ptrCast(context)) catch return null;
-                defer member_method.decref();
                 if (!py.Method.check(member_method)) {
+                    defer member_method.decref();
                     return py.typeErrorObject(null, "Context must the name of a member method for mode {}. Got '{s}'", .{ mode, context.typeName() });
                 }
-                self.info.default_mode = .method;
-                py.xsetref(&self.default_context, member_method.newref());
+                self.setDefaultContext(.method, member_method);
             },
             else => {
                 return py.typeErrorObject(null, "DefaultValue mode not yet supported {}", .{mode});
@@ -339,24 +339,21 @@ pub const MemberBase = extern struct {
                 if (!context.isCallable()) {
                     return py.typeErrorObject(null, "Context must callable for mode {}. Got '{s}'", .{ mode, context.typeName() });
                 }
-                self.info.validate_mode = .call_old_new;
-                py.xsetref(&self.validate_context, context.newref());
+                self.setValidateContext(.call_old_new, context.newref());
             },
             .ObjectMethod_NameOldNew => {
                 if (!context.isCallable()) {
                     return py.typeErrorObject(null, "Context must callable for mode {}. Got '{s}'", .{ mode, context.typeName() });
                 }
-                self.info.validate_mode = .call_name_old_new;
-                py.xsetref(&self.validate_context, context.newref());
+                self.setValidateContext(.call_name_old_new, context.newref());
             },
             .MemberMethod_ObjectOldNew => {
                 const member_method = self.getAttr(@ptrCast(context)) catch return null;
-                defer member_method.decref();
                 if (!py.Method.check(member_method)) {
+                    defer member_method.decref();
                     return py.typeErrorObject(null, "Context must the name of a member method for mode {}. Got '{s}'", .{ mode, context.typeName() });
                 }
-                self.info.validate_mode = .call_object_old_new;
-                py.xsetref(&self.validate_context, member_method.newref());
+                self.setValidateContext(.call_object_old_new, member_method);
             },
             else => {
                 return py.typeErrorObject(null, "Validate mode not yet supported {}", .{mode});
@@ -472,16 +469,37 @@ pub const MemberBase = extern struct {
     // --------------------------------------------------------------------------
     // Internal api
     // --------------------------------------------------------------------------
+    // Borrows reference to name
     pub fn setName(self: *Self, name: *Str) void {
         py.xsetref(@ptrCast(&self.name), @ptrCast(name.newref()));
         Str.internInPlace(@ptrCast(&self.name.?));
     }
+
+    // Borrows reference to pwmer
     pub fn setOwner(self: *Self, owner: ?*Object) void {
         if (owner) |o| {
             py.xsetref(&self.owner, o.newref());
         } else {
             py.clear(&self.owner);
         }
+    }
+
+    // Steals reference to context
+    pub fn setDefaultContext(self: *Self, mode: DefaultMode, context: *Object) void {
+        self.info.default_mode = mode;
+        py.xsetref(&self.default_context, context);
+    }
+
+    // Steals reference to context
+    pub fn setValidateContext(self: *Self, mode: ValidateMode, context: *Object) void {
+        self.info.validate_mode = mode;
+        py.xsetref(&self.validate_context, context);
+    }
+
+    // Steals reference to context
+    pub fn setCoercerContext(self: *Self, mode: CoerceMode, context: *Object) void {
+        self.info.coerce = mode == .yes;
+        py.xsetref(&self.coercer_context, context);
     }
 
     pub inline fn validate(self: *Self, atom: *Atom, oldvalue: *Object, newvalue: *Object) py.Error!*Object {
@@ -758,14 +776,16 @@ pub const MemberBase = extern struct {
     // Check if object is an atom_meta
     pub fn traverse(self: *Self, visit: py.visitproc, arg: ?*anyopaque) c_int {
         if (comptime @import("api.zig").debug_level.traverse) {
-            py.print("Member.traverse(name: {?s}, owner: {?s}, meta: {?s}, default_context: {?s}, validate_context={?s}, coercer_context={?s})\n", .{
-                self.name,
-                self.owner,
-                self.metadata,
-                self.default_context,
-                self.validate_context,
-                self.coercer_context,
-            }) catch return -1;
+            if (@import("api.zig").debug_level.matches(self.name)) {
+                py.print("Member.traverse(name: {?s}, owner: {?s}, meta: {?s}, default_context: {?s}, validate_context={?s}, coercer_context={?s})\n", .{
+                    self.name,
+                    self.owner,
+                    self.metadata,
+                    self.default_context,
+                    self.validate_context,
+                    self.coercer_context,
+                }) catch return -1;
+            }
         }
         return py.visitAll(.{
             self.name,
@@ -868,7 +888,9 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         // Returns new reference
         pub inline fn default(self: *Self, atom: *Atom) py.Error!*Object {
             if (comptime @import("api.zig").debug_level.defaults) {
-                try py.print("{s}.default(name: {?s}, storage_mode: {s}, default_mode: {s}, atom: {})\n", .{ type_name, self.base.name, @tagName(storage_mode), @tagName(self.base.info.default_mode), atom });
+                if (@import("api.zig").debug_level.matches(self.base.name)) {
+                    try py.print("{s}.default(name: {?s}, storage_mode: {s}, default_mode: {s}, atom: {})\n", .{ type_name, self.base.name, @tagName(storage_mode), @tagName(self.base.info.default_mode), atom });
+                }
             }
             if (comptime @hasDecl(impl, "default")) {
                 return impl.default(@ptrCast(self), atom);
@@ -909,7 +931,9 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         // static storage mode always returns a new reference
         pub inline fn readSlot(self: *Self, atom: *Atom, slot: *?*Object) py.Error!?*Object {
             if (comptime @import("api.zig").debug_level.reads) {
-                try py.print("{s}.readSlot(name: {?s}, storage_mode: {s}, atom: {})\n", .{ type_name, self.base.name, @tagName(storage_mode), atom });
+                if (@import("api.zig").debug_level.matches(self.base.name)) {
+                    try py.print("{s}.readSlot(name: {?s}, storage_mode: {s}, atom: {})\n", .{ type_name, self.base.name, @tagName(storage_mode), atom });
+                }
             }
             switch (comptime storage_mode) {
                 .pointer => {
@@ -975,7 +999,9 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         // return whether it stole a reference to value or borrowed it so the caller can know how to handle it.
         pub inline fn writeSlot(self: *Self, atom: *Atom, slot: *?*Object, value: *Object) py.Error!Ownership {
             if (comptime @import("api.zig").debug_level.writes) {
-                try py.print("{s}.writeSlot(name: {?s}, storage_mode: {s}, atom: {}, value: {?s})\n", .{ type_name, self.base.name, @tagName(storage_mode), atom, value });
+                if (@import("api.zig").debug_level.matches(self.base.name)) {
+                    try py.print("{s}.writeSlot(name: {?s}, storage_mode: {s}, atom: {}, value: {?s})\n", .{ type_name, self.base.name, @tagName(storage_mode), atom, value });
+                }
             }
             switch (comptime storage_mode) {
                 .pointer => {
@@ -1025,7 +1051,9 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         // Default delete slot implementation. It does not need to worry about discarding the old value
         pub inline fn deleteSlot(self: *Self, atom: *Atom, slot: *?*Object) void {
             if (comptime @import("api.zig").debug_level.deletes) {
-                py.print("{s}.deleteSlot(name: {?s}, storage_mode: {s}, atom: {})\n", .{ type_name, self.base.name, @tagName(storage_mode), atom }) catch {};
+                if (@import("api.zig").debug_level.matches(self.base.name)) {
+                    py.print("{s}.deleteSlot(name: {?s}, storage_mode: {s}, atom: {})\n", .{ type_name, self.base.name, @tagName(storage_mode), atom }) catch {};
+                }
             }
             switch (comptime storage_mode) {
                 .pointer => {
@@ -1102,14 +1130,11 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 if (!default_factory.?.isCallable()) {
                     try py.typeError("factory must be a callable that returns the default value", .{});
                 }
-                self.base.info.default_mode = .func;
-                py.xsetref(&self.base.default_context, default_factory.?.newref());
+                self.base.setDefaultContext(.func, default_factory.?.newref());
             } else if (py.notNone(default_context)) {
-                self.base.info.default_mode = .static;
-                py.xsetref(&self.base.default_context, default_context.?.newref());
+                self.base.setDefaultContext(.static, default_context.?.newref());
             } else if (comptime @hasDecl(impl, "initDefault")) {
-                self.base.info.default_mode = .static;
-                py.xsetref(&self.base.default_context, try impl.initDefault());
+                self.base.setDefaultContext(.static, try impl.initDefault());
             }
         }
 

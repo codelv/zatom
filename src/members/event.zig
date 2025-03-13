@@ -152,7 +152,7 @@ pub const EventMember = Member("Event", 3, struct {
         try py.parseTupleAndKeywords(args, kwargs, "|O", @ptrCast(&kwlist), .{&kind});
         if (kind) |v| {
             // Let InstanceMember figure out if kind is valid
-            py.xsetref(&self.validate_context, try InstanceMember.TypeObject.?.callArgs(.{v}));
+            self.setValidateContext(.default, try InstanceMember.TypeObject.?.callArgs(.{v}));
         }
     }
 

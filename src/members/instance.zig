@@ -33,16 +33,14 @@ pub const InstanceMember = Member("Instance", 4, struct {
         var optional: ?*Object = null;
         try py.parseTupleAndKeywords(args, kwargs, "O|OOOO", @ptrCast(&kwlist), .{ &kind, &init_args, &init_kwargs, &factory, &optional });
         try self.validateTypeOrTupleOfTypes(kind);
-        py.xsetref(&self.validate_context, kind.newref());
+        self.setValidateContext(.default, kind.newref());
 
         if (py.notNone(factory)) {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
-            self.info.default_mode = .func;
-            py.xsetref(&self.default_context, factory.?.newref());
+            self.setDefaultContext(.func, factory.?.newref());
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
-            self.info.default_mode = .func;
             const cls = if (Tuple.check(kind)) try Tuple.get(@ptrCast(kind), 0) else kind;
 
             const partial_kwargs: ?*Dict = blk: {
@@ -67,9 +65,9 @@ pub const InstanceMember = Member("Instance", 4, struct {
                 break :blk try Tuple.packNewrefs(.{cls});
             };
             defer partial_args.decref();
-            py.xsetref(&self.default_context, try partial.?.call(partial_args, partial_kwargs));
+            self.setDefaultContext(.func, try partial.?.call(partial_args, partial_kwargs));
         } else {
-            py.xsetref(&self.default_context, py.returnNone());
+            self.setDefaultContext(.static, py.returnNone());
         }
 
         // If a factory or init args were provided set to to not optional
@@ -140,17 +138,14 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
         if (!resolve_func.isCallable()) {
             return py.typeError("resolve must be a callable that returns the type", .{});
         }
-        py.xsetref(&self.validate_context, resolve_func.newref());
+        self.setValidateContext(.default, resolve_func.newref());
 
         if (py.notNone(factory)) {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
-            self.info.default_mode = .func;
-            py.xsetref(&self.default_context, factory.?.newref());
+            self.setDefaultContext(.func, factory.?.newref());
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
-            self.info.default_mode = .func;
-
             const partial_kwargs: *Object = blk: {
                 if (init_kwargs) |v| {
                     if (Dict.check(v)) {
@@ -173,9 +168,10 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
                 break :blk py.None();
             };
             // Make a tuple of (args, kwargs) to call with the resolved type
-            py.xsetref(&self.default_context, @ptrCast(try Tuple.packNewrefs(.{ partial_args, partial_kwargs })));
+            const resolve_context = try Tuple.packNewrefs(.{ partial_args, partial_kwargs });
+            self.setDefaultContext(.func, @ptrCast(resolve_context));
         } else {
-            py.xsetref(&self.default_context, py.returnNone());
+            self.setDefaultContext(.static, py.returnNone());
         }
 
         // If a factory or init args were provided set to to not optional
@@ -202,18 +198,18 @@ pub const ForwardInstanceMember = Member("ForwardInstance", 5, struct {
         if (py.notNone(self.default_context) and Tuple.check(self.default_context.?)) {
             const tuple: *Tuple = @ptrCast(self.default_context.?);
             // These may be none
-            const args = tuple.getUnsafe(0).?;
-            const kwargs = tuple.getUnsafe(1).?;
+            const args = try tuple.get(0);
+            const kwargs = try tuple.get(1);
 
             const first_kind = if (Tuple.check(kind)) Tuple.getUnsafe(@ptrCast(kind), 0).? else kind;
 
             const new_args = if (args.isNone()) try Tuple.packNewrefs(.{first_kind}) else try Tuple.prepend(@ptrCast(args), first_kind);
             defer new_args.decref();
-            py.xsetref(&self.default_context, try partial.?.call(new_args, if (kwargs.isNone()) null else @ptrCast(kwargs)));
+            self.setDefaultContext(.func, try partial.?.call(new_args, if (kwargs.isNone()) null else @ptrCast(kwargs)));
         }
 
         // Replace the resolver with the kind
-        py.xsetref(&self.validate_context, kind.newref());
+        self.setValidateContext(.default, kind.newref());
         self.info.resolved = true;
     }
 

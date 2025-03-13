@@ -7,6 +7,7 @@ from zatom.api import (
     Bytes,
     Coerced,
     Constant,
+    DefaultValue,
     Dict,
     Enum,
     Event,
@@ -417,6 +418,30 @@ def test_constant():
     with pytest.raises(TypeError):
         del a.pwd
     assert a.pwd == "foobar"
+
+def test_constant_subclass():
+    class Constraint(Constant):
+        __slots__ = ()
+
+        def __init__(self):
+            super().__init__()
+            mode = DefaultValue.MemberMethod_Object
+            self.set_default_value_mode(mode, 'default')
+
+        def default(self, owner):
+            return self.index
+
+    class A(Atom):
+        height = Constraint()
+        width = Constraint()
+        area = Constant()
+        def _default_area(self):
+            return self.width * self.height
+
+    a = A()
+    assert a.height == 0
+    assert a.width == 1
+    assert a.area == 0
 
 
 def test_set():

@@ -219,22 +219,21 @@ pub const SetMember = Member("Set", 14, struct {
             if (!default_factory.?.isCallable()) {
                 return py.typeError("factory must be a callable that returns the default value", .{});
             }
-            self.info.default_mode = .func;
-            py.xsetref(&self.default_context, default_factory.?.newref());
+            self.setDefaultContext(.func, default_factory.?.newref());
         } else if (py.notNone(default_value)) {
             if (!Set.check(default_value.?)) {
                 return py.typeError("Set default must be a set", .{});
             }
-            py.xsetref(&self.default_context, default_value.?.newref());
+            self.setDefaultContext(.static, default_value.?.newref());
         } else {
-            py.xsetref(&self.default_context, @ptrCast(try Set.new(null)));
+            self.setDefaultContext(.static, @ptrCast(try Set.new(null)));
         }
         if (item) |kind| {
             // TODO: support any member
             if (MemberBase.check(kind)) {
-                py.xsetref(&self.validate_context, kind.newref());
+                self.setValidateContext(.default, kind.newref());
             } else if (!kind.isNone()) {
-                py.xsetref(&self.validate_context, try InstanceMember.TypeObject.?.callArgs(.{kind}));
+                self.setValidateContext(.default, try InstanceMember.TypeObject.?.callArgs(.{kind}));
             }
             if (self.validate_context) |context| {
                 try self.bindValidatorMember(@ptrCast(context), member.item_str.?);

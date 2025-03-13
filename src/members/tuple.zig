@@ -31,22 +31,21 @@ pub const TupleMember = Member("Tuple", 15, struct {
             if (!default_factory.?.isCallable()) {
                 return py.typeError("factory must be a callable that returns the default value", .{});
             }
-            self.info.default_mode = .func;
-            py.xsetref(&self.default_context, default_factory.?.newref());
+            self.setDefaultContext(.func, default_factory.?.newref());
         } else if (py.notNone(default_value)) {
             if (!Tuple.check(default_value.?)) {
                 return py.typeError("Tuple default must be a tuple", .{});
             }
-            py.xsetref(&self.default_context, default_value.?.newref());
+            self.setDefaultContext(.static, default_value.?.newref());
         } else {
-            py.xsetref(&self.default_context, @ptrCast(try Tuple.new(0)));
+            self.setDefaultContext(.static, @ptrCast(try Tuple.new(0)));
         }
         if (item) |kind| {
             // TODO: support any member
             if (MemberBase.check(kind)) {
-                py.xsetref(&self.validate_context, kind.newref());
+                self.setValidateContext(.default, kind.newref());
             } else if (!kind.isNone()) {
-                py.xsetref(&self.validate_context, try InstanceMember.TypeObject.?.callArgs(.{kind}));
+                self.setValidateContext(.default, try InstanceMember.TypeObject.?.callArgs(.{kind}));
             }
             if (self.validate_context) |context| {
                 try self.bindValidatorMember(@ptrCast(context), member.item_str.?);

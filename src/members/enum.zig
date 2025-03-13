@@ -40,8 +40,8 @@ pub const EnumMember = Member("Enum", 2, struct {
             return py.typeError("bitsize out of range", .{});
         }
         self.info.width = @intCast(bitsize -| 1);
-        py.xsetref(&self.default_context, default_value.newref());
-        py.xsetref(&self.validate_context, @ptrCast(args.newref()));
+        self.setDefaultContext(.static, default_value.newref());
+        self.setValidateContext(.default, @ptrCast(args.newref()));
     }
 
     pub inline fn writeSlotStatic(self: *MemberBase, _: *Atom, value: *Object) py.Error!usize {
@@ -90,8 +90,7 @@ pub const EnumMember = Member("Enum", 2, struct {
             return py.typeErrorObject(null, "invalid enum value", .{});
         }
         const clone = self.cloneOrError() catch return null;
-        clone.info.default_mode = .static;
-        py.xsetref(&clone.default_context, new_default.newref());
+        clone.setDefaultContext(.static, new_default.newref());
         return @ptrCast(clone);
     }
 

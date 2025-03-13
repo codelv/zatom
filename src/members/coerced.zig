@@ -33,16 +33,15 @@ pub const CoercedMember = Member("Coerced", 18, struct {
         var coercer: ?*Object = null;
         try py.parseTupleAndKeywords(args, kwargs, "O|OOOO", @ptrCast(&kwlist), .{ &kind, &init_args, &init_kwargs, &factory, &coercer });
         try self.validateTypeOrTupleOfTypes(kind);
-        py.xsetref(&self.validate_context, kind.newref());
+        self.setValidateContext(.default, kind.newref());
 
-        const cls = if (Tuple.check(kind)) Tuple.getUnsafe(@ptrCast(kind), 0).? else kind;
+        const cls = if (Tuple.checkExact(kind)) Tuple.getUnsafe(@ptrCast(kind), 0).? else kind;
 
-        self.info.default_mode = .func;
         if (py.notNone(factory)) {
             if (!factory.?.isCallable()) {
                 return py.typeError("factory must be callable", .{});
             }
-            py.xsetref(&self.default_context, factory.?.newref());
+            self.setDefaultContext(.func, factory.?.newref());
         } else if (py.notNone(init_args) or py.notNone(init_kwargs)) {
             const partial_kwargs: ?*Dict = blk: {
                 if (init_kwargs) |v| {
@@ -66,19 +65,19 @@ pub const CoercedMember = Member("Coerced", 18, struct {
                 break :blk try Tuple.packNewrefs(.{cls});
             };
             defer partial_args.decref();
-            py.xsetref(&self.default_context, try partial.?.call(partial_args, partial_kwargs));
+            self.setDefaultContext(.func, try partial.?.call(partial_args, partial_kwargs));
         } else {
-            py.xsetref(&self.default_context, cls.newref());
+            self.setDefaultContext(.func, cls.newref());
         }
 
         if (py.notNone(coercer)) {
             if (!coercer.?.isCallable()) {
                 return py.typeError("Coerced member's coercer must be callable, got: {s}", .{coercer.?.typeName()});
             }
-            py.xsetref(&self.coercer_context, coercer.?.newref());
+            self.setCoercerContext(.yes, coercer.?);
         } else {
             // It's possbile that there is no init args which could be a problem
-            py.xsetref(&self.coercer_context, cls.newref());
+            self.setCoercerContext(.yes, cls);
         }
     }
 
