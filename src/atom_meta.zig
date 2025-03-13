@@ -349,11 +349,7 @@ pub const AtomMeta = extern struct {
         // Modify the basicsize so instances allocate the correct size
         cls.info = info;
         if (comptime Atom.slot_type == .inlined) {
-            const actual = cls.base.impl.ht_type.tp_basicsize;
-            const expected = calculateTypeSize(info, true);
-            if (actual != expected) {
-                try py.systemError("AtomMeta inline type size error: actual {} != expected {}", .{ actual, expected });
-            }
+            try cls.validateTypeSize();
         }
         if (cls.set_atom_members(members, null) < 0) {
             return error.PyError;
@@ -457,6 +453,7 @@ pub const AtomMeta = extern struct {
             if (comptime Atom.slot_type == .inlined) {
                 if (self.info.slot_count > old_slot_count) {
                     self.updateTypeSize();
+                    self.validateTypeSize() catch return null;
                 }
             }
         } else {
@@ -496,6 +493,28 @@ pub const AtomMeta = extern struct {
             @compileError("Function is only for inlined slots");
         }
         self.setTypeSize(calculateTypeSize(self.info, true));
+    }
+
+    fn validateTypeSize(self: *Self) !void {
+        if (comptime Atom.slot_type != .inlined) {
+            @compileError("Function is only for inlined slots");
+        }
+
+        // Make sure the type size is what is expected
+        const type_size = self.base.impl.ht_type.tp_basicsize;
+        const expected_size = calculateTypeSize(self.info, true);
+        if (type_size != expected_size) {
+            try py.systemError("AtomMeta inline type size error: type_size {} != expected_size {}", .{ type_size, expected_size });
+        }
+
+        // Make sure any __slot__ members are not out of range
+        const py_slot_start = calculateTypeSize(self.info, false);
+        for (try self.base.getMemberDefs(), 0..) |m, i| {
+            const offset = py_slot_start + i * @sizeOf(*@TypeOf(m));
+            if (m.offset != offset or m.offset < py_slot_start or m.offset > type_size) {
+                try py.systemError("AtomMeta __slot__ member '{s}' offset {} is invalid. Expected {} in range {} to {}", .{ m.name, m.offset, offset, py_slot_start, type_size });
+            }
+        }
     }
 
     pub fn initStaticObservers(self: *Self, observers: *List, members: *Dict, bases: *Tuple) !void {
