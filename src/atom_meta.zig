@@ -305,6 +305,7 @@ pub const AtomMeta = extern struct {
                             try checkObserveMethod(dict, new_member, observers);
                             // It's safe to modify the value of dict while iterating since the key is unchanged
                             try dict.set(@ptrCast(attr), @ptrCast(new_member));
+                            try members.set(@ptrCast(attr), @ptrCast(new_member));
                             break;
                         }
                     }
@@ -473,9 +474,6 @@ pub const AtomMeta = extern struct {
         if (self.original_type_size == 0) {
             // When first called save the original type size calculated by python
             self.original_type_size = @intCast(self.base.impl.ht_type.tp_basicsize);
-        } else {
-            // Size can only ever increase
-            std.debug.assert(size >= self.original_type_size);
         }
         self.base.impl.ht_type.tp_basicsize = @intCast(size);
     }
@@ -595,6 +593,7 @@ pub const AtomMeta = extern struct {
             try py.typeError("atom members must be a dict", .{});
 
         var pos: isize = 0;
+        // TODO: Validate all member indexes
         while (members.next(&pos)) |item| {
             if (!Str.check(item.key))
                 try py.typeError("atom members keys must strings", .{});

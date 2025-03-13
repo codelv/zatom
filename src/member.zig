@@ -254,7 +254,9 @@ pub const MemberBase = extern struct {
 
     pub fn do_default_value(self: *Self, atom: *Atom) ?*Object {
         if (comptime @import("api.zig").debug_level.defaults) {
-            py.print("Member.do_default_value(member:{}, atom: {})\n", .{ self, atom }) catch return null;
+            if (@import("api.zig").debug_level.matches(self.name)) {
+                py.print("Member.do_default_value(member: {s} {}, atom: {})\n", .{ self.name.?, self, atom }) catch return null;
+            }
         }
         @setEvalBranchQuota(10000);
         inline for (all_modules) |mod| {
@@ -889,7 +891,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         pub inline fn default(self: *Self, atom: *Atom) py.Error!*Object {
             if (comptime @import("api.zig").debug_level.defaults) {
                 if (@import("api.zig").debug_level.matches(self.base.name)) {
-                    try py.print("{s}.default(name: {?s}, storage_mode: {s}, default_mode: {s}, atom: {})\n", .{ type_name, self.base.name, @tagName(storage_mode), @tagName(self.base.info.default_mode), atom });
+                    try py.print("{s}.default(name: {?s}, index: {}, storage_mode: {s}, default_mode: {s}, atom: {})\n", .{ type_name, self.base.name, self.base.info.index, @tagName(storage_mode), @tagName(self.base.info.default_mode), atom });
                 }
             }
             if (comptime @hasDecl(impl, "default")) {
@@ -932,7 +934,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         pub inline fn readSlot(self: *Self, atom: *Atom, slot: *?*Object) py.Error!?*Object {
             if (comptime @import("api.zig").debug_level.reads) {
                 if (@import("api.zig").debug_level.matches(self.base.name)) {
-                    try py.print("{s}.readSlot(name: {?s}, storage_mode: {s}, atom: {})\n", .{ type_name, self.base.name, @tagName(storage_mode), atom });
+                    try py.print("{s}.readSlot(name: {?s}, index: {}, storage_mode: {s}, atom: {})\n", .{ type_name, self.base.name, self.base.info.index, @tagName(storage_mode), atom });
                 }
             }
             switch (comptime storage_mode) {
@@ -1000,7 +1002,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         pub inline fn writeSlot(self: *Self, atom: *Atom, slot: *?*Object, value: *Object) py.Error!Ownership {
             if (comptime @import("api.zig").debug_level.writes) {
                 if (@import("api.zig").debug_level.matches(self.base.name)) {
-                    try py.print("{s}.writeSlot(name: {?s}, storage_mode: {s}, atom: {}, value: {?s})\n", .{ type_name, self.base.name, @tagName(storage_mode), atom, value });
+                    try py.print("{s}.writeSlot(name: {?s}, index: {}, storage_mode: {s}, atom: {}, value: {?s})\n", .{ type_name, self.base.name, self.base.info.index, @tagName(storage_mode), atom, value });
                 }
             }
             switch (comptime storage_mode) {
@@ -1052,7 +1054,7 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         pub inline fn deleteSlot(self: *Self, atom: *Atom, slot: *?*Object) void {
             if (comptime @import("api.zig").debug_level.deletes) {
                 if (@import("api.zig").debug_level.matches(self.base.name)) {
-                    py.print("{s}.deleteSlot(name: {?s}, storage_mode: {s}, atom: {})\n", .{ type_name, self.base.name, @tagName(storage_mode), atom }) catch {};
+                    py.print("{s}.deleteSlot(name: {?s}, index: {}, storage_mode: {s}, atom: {})\n", .{ type_name, self.base.name, self.base.info.index, @tagName(storage_mode), atom }) catch {};
                 }
             }
             switch (comptime storage_mode) {
@@ -1143,7 +1145,13 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
                 if (!atom.typeCheckSelf()) {
                     return py.typeErrorObject(null, "Members can only be used on Atom objects", .{});
                 }
-                return self.getattr(atom) catch null;
+                const value = self.getattr(atom) catch null;
+                if (comptime @import("api.zig").debug_level.gets) {
+                    if (@import("api.zig").debug_level.matches(self.base.name)) {
+                        py.print("{s}.get(name: {?s}, index: {}, storage_mode: {s}, default_mode: {s}, atom: {}, result={?s})\n", .{ type_name, self.base.name, self.base.info.index, @tagName(storage_mode), @tagName(self.base.info.default_mode), atom, value }) catch return null;
+                    }
+                }
+                return value;
             }
             return @ptrCast(self.newref());
         }
@@ -1151,6 +1159,11 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
         pub fn __set__(self: *Self, atom: *Atom, value: ?*Object) c_int {
             if (!atom.typeCheckSelf()) {
                 return py.typeErrorObject(-1, "Members can only be used on Atom objects", .{});
+            }
+            if (comptime @import("api.zig").debug_level.sets) {
+                if (@import("api.zig").debug_level.matches(self.base.name)) {
+                    py.print("{s}.set(name: {?s}, index: {}, storage_mode: {s}, default_mode: {s}, atom: {}, value={?s})\n", .{ type_name, self.base.name, self.base.info.index, @tagName(storage_mode), @tagName(self.base.info.default_mode), atom, value }) catch return -1;
+                }
             }
             if (value) |v| {
                 self.setattr(atom, v) catch return -1;

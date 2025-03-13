@@ -23,6 +23,9 @@ pub const DebugLevel = struct {
     reads: bool = false,
     writes: bool = false,
     deletes: bool = false,
+    gets: bool = false,
+    sets: bool = false,
+    decrefs: bool = false,
     name_filter: ?[:0]const u8 = null,
 
     pub fn matches(self: DebugLevel, name: ?*py.Str) bool {
@@ -36,9 +39,12 @@ pub const DebugLevel = struct {
 };
 pub const debug_level = DebugLevel{
     //.defaults=true, .reads=true, .writes=true, .deletes=true,
+    //.gets=true, .sets=true,
     //.traverse=true,
+    //.decrefs = true,
     //.name_filter="icon_size",
 };
+pub const debug_decrefs = debug_level.decrefs;
 
 fn modexec(mod: *py.Module) !c_int {
     try member.initModule(mod);
@@ -53,6 +59,11 @@ fn modexec(mod: *py.Module) !c_int {
     errdefer observer_pool.deinitModule(mod);
     try modes.initModule(mod);
     errdefer modes.deinitModule(mod);
+
+    const builtins = try py.importModule("builtins");
+    defer builtins.decref();
+    try mod.addObject("ChangeDict", try builtins.getAttrString("dict"));
+
     return 0;
 }
 

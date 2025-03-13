@@ -386,7 +386,10 @@ pub const Atom = extern struct {
                                 member.validate_context,
                                 member.coercer_context,
                             }) catch return -1;
-                            py.print(", slot: '{?s}')\n", .{slot}) catch return -1;
+                            py.print(", slot type: '{s}' slot type refs: {})\n", .{
+                                if (slot) |o| o.typeName() else "null",
+                                if (slot) |o| o.typeref().refcnt() else 0,
+                            }) catch return -1;
                         }
                     }
                     const r = py.visit(slot, visit, arg);
