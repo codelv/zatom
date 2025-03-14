@@ -174,9 +174,44 @@ pub const PropertyMember = Member("Property", 19, struct {
         return func.newref();
     }
 
-    pub fn reset(self: *PropertyMember, owner: *Object) ?*Object {
-        if (self.base.info.storage_mode == .pointer) {
-            return self.base.del_slot(@ptrCast(owner));
+    pub fn reset(self: *PropertyMember, atom: *Atom) ?*Object {
+        return resetOrError(self, atom) catch null;
+    }
+
+    pub fn resetOrError(self: *PropertyMember, atom: *Atom) !*Object {
+        if (!atom.typeCheckSelf()) {
+            try py.typeError("Invalid arguments. Signature is reset(atom: Atom)", .{});
+        }
+        // TODO: Support ChangeType.PROPERTY
+        if (self.base.shouldNotify(atom)) {
+            const old = blk: {
+                if (self.base.info.storage_mode == .pointer) {
+                    const ptr = try atom.slotPtr(@ptrCast(self));
+                    break :blk ptr.* orelse py.None();
+                }
+                break :blk py.None();
+            };
+            // Get new value
+            const new = try get(@ptrCast(self), atom);
+            defer new.decref();
+            if (old != new) {
+                // Create change dict
+                var change = try Dict.new();
+                defer change.decref();
+                try change.set(@ptrCast(member.type_str.?), @ptrCast(member.property_str.?));
+                try change.set(@ptrCast(member.object_str.?), @ptrCast(atom));
+                try change.set(@ptrCast(member.name_str.?), @ptrCast(self.base.name.?));
+                try change.set(@ptrCast(member.oldvalue_str.?), old);
+                try change.set(@ptrCast(member.value_str.?), new);
+
+                try self.base.notifyChange(atom, change, .PROPERTY);
+
+                if (self.base.info.storage_mode == .pointer) {
+                    // If cached, update slot with new value
+                    const ptr = try atom.slotPtr(@ptrCast(self));
+                    py.xsetref(ptr, new.newref());
+                }
+            }
         }
         return py.returnNone();
     }

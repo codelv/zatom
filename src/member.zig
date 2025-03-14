@@ -20,6 +20,7 @@ pub var key_str: ?*Str = null;
 pub var value_str: ?*Str = null;
 pub var oldvalue_str: ?*Str = null;
 pub var item_str: ?*Str = null;
+pub var property_str: ?*Str = null;
 
 const Atom = @import("atom.zig").Atom;
 const AtomMeta = @import("atom_meta.zig").AtomMeta;
@@ -1213,7 +1214,7 @@ const all_modules = .{
     @import("members/property.zig"),
 };
 
-const all_strings = .{ "undefined", "type", "object", "name", "value", "oldvalue", "key", "create", "update", "delete", "item" };
+const all_strings = .{ "undefined", "type", "object", "name", "value", "oldvalue", "key", "create", "update", "delete", "item", "property" };
 //
 //
 
