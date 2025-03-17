@@ -263,11 +263,13 @@ def test_coerced():
     with pytest.raises(ValueError):
         a.count = "x"
 
+
 def test_coerced_subclass():
     class Size(Atom):
         x = Int()
         y = Int()
-        def __init__(self, x: int=0, y: int=0):
+
+        def __init__(self, x: int = 0, y: int = 0):
             super().__init__(x=x, y=y)
 
     class A(Atom):
@@ -279,10 +281,10 @@ def test_coerced_subclass():
         def _default_size(self):
             return Size(320, 240)
 
-
     b = B()
     assert b.size.x == 320
     assert b.size.y == 240
+
 
 def test_typed():
     class A(Atom):
@@ -419,6 +421,7 @@ def test_constant():
         del a.pwd
     assert a.pwd == "foobar"
 
+
 def test_constant_subclass():
     class Constraint(Constant):
         __slots__ = ()
@@ -426,7 +429,7 @@ def test_constant_subclass():
         def __init__(self):
             super().__init__()
             mode = DefaultValue.MemberMethod_Object
-            self.set_default_value_mode(mode, 'default')
+            self.set_default_value_mode(mode, "default")
 
         def default(self, owner):
             return self.index
@@ -435,6 +438,7 @@ def test_constant_subclass():
         height = Constraint()
         width = Constraint()
         area = Constant()
+
         def _default_area(self):
             return self.width * self.height
 

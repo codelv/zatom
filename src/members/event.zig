@@ -170,7 +170,7 @@ pub const EventMember = Member("Event", 3, struct {
     }
 
     pub fn setattr(self: *MemberBase, atom: *Atom, newvalue: *Object) !void {
-        if (self.shouldNotify(atom)) {
+        if (self.shouldNotify(atom, .EVENT)) {
             const value = try validate(self, atom, py.None(), newvalue);
             defer value.decref();
 

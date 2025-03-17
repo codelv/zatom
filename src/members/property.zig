@@ -182,18 +182,24 @@ pub const PropertyMember = Member("Property", 19, struct {
         if (!atom.typeCheckSelf()) {
             try py.typeError("Invalid arguments. Signature is reset(atom: Atom)", .{});
         }
-        // TODO: Support ChangeType.PROPERTY
-        if (self.base.shouldNotify(atom)) {
+        if (self.base.shouldNotify(atom, .PROPERTY)) {
             const old = blk: {
                 if (self.base.info.storage_mode == .pointer) {
                     const ptr = try atom.slotPtr(@ptrCast(self));
-                    break :blk ptr.* orelse py.None();
+                    // Steal and the old value clear
+                    if (ptr.*) |v| {
+                        defer ptr.* = null;
+                        break :blk v;
+                    }
                 }
-                break :blk py.None();
+                break :blk py.returnNone();
             };
+            defer old.decref();
+
             // Get new value
-            const new = try get(@ptrCast(self), atom);
+            const new = try getattr(@ptrCast(self), atom);
             defer new.decref();
+
             if (old != new) {
                 // Create change dict
                 var change = try Dict.new();
@@ -205,12 +211,6 @@ pub const PropertyMember = Member("Property", 19, struct {
                 try change.set(@ptrCast(member.value_str.?), new);
 
                 try self.base.notifyChange(atom, change, .PROPERTY);
-
-                if (self.base.info.storage_mode == .pointer) {
-                    // If cached, update slot with new value
-                    const ptr = try atom.slotPtr(@ptrCast(self));
-                    py.xsetref(ptr, new.newref());
-                }
             }
         }
         return py.returnNone();

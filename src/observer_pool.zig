@@ -144,6 +144,21 @@ pub const ObserverPool = struct {
         return self.map.contains(try topic.hash());
     }
 
+    pub fn hasAnyObserver(self: ObserverPool, topic: *Str, change_types: u8) py.Error!bool {
+        if (self.map.getPtr(try topic.hash())) |observer_map| {
+            if (change_types == @intFromEnum(ChangeType.ANY)) {
+                return observer_map.size > 0;
+            }
+            var iter = observer_map.valueIterator();
+            while (iter.next()) |item| {
+                if (item.enabled(change_types)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     pub fn hasObserver(self: ObserverPool, topic: *Str, observer: *Object, change_types: u8) py.Error!bool {
         if (self.map.getPtr(try topic.hash())) |observer_map| {
             if (observer_map.getPtr(try observer.hash())) |info| {

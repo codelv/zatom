@@ -554,9 +554,9 @@ pub const MemberBase = extern struct {
     pub fn validateTypeOrTupleOfTypes(self: *const Self, kind: *Object) py.Error!void {
         if (Type.check(kind)) {
             return;
-        } else if (Tuple.check(kind)) {
+        } else if (Tuple.checkExact(kind)) {
             const kinds: *Tuple = @ptrCast(kind);
-            const n = try kinds.size();
+            const n: usize = @intCast(kinds.sizeUnchecked());
             if (n == 0) {
                 return py.typeError("{s} kind must be a type or tuple of types. Got an empty tuple", .{self.typeName()});
             }
@@ -616,15 +616,8 @@ pub const MemberBase = extern struct {
         return null;
     }
 
-    pub fn shouldNotify(self: *Self, atom: *Atom) bool {
-        return (!atom.info.notifications_disabled and atom.hasAnyObservers(self.name.?) catch unreachable);
-    }
-
-    pub fn hasObserversInternal(self: *Self) bool {
-        if (self.staticObservers()) |pool| {
-            return pool.hasTopic(self.name.?) catch unreachable;
-        }
-        return false;
+    pub fn shouldNotify(self: *Self, atom: *Atom, change_type: ChangeType) bool {
+        return (!atom.info.notifications_disabled and atom.hasAnyObservers(self.name.?, change_type) catch unreachable);
     }
 
     pub fn notifyChange(self: *Self, atom: *Atom, change: *Dict, change_type: ChangeType) !void {
@@ -632,7 +625,7 @@ pub const MemberBase = extern struct {
     }
 
     pub fn notifyCreate(self: *Self, atom: *Atom, newvalue: *Object) !void {
-        if (self.shouldNotify(atom)) {
+        if (self.shouldNotify(atom, .CREATE)) {
             var change: *Dict = try Dict.new();
             defer change.decref();
             try change.set(@ptrCast(type_str.?), @ptrCast(create_str.?));
@@ -644,7 +637,7 @@ pub const MemberBase = extern struct {
     }
 
     pub fn notifyUpdate(self: *Self, atom: *Atom, oldvalue: *Object, newvalue: *Object) !void {
-        if (oldvalue != newvalue and self.shouldNotify(atom)) {
+        if (oldvalue != newvalue and self.shouldNotify(atom, .UPDATE)) {
             var change: *Dict = try Dict.new();
             defer change.decref();
             try change.set(@ptrCast(type_str.?), @ptrCast(update_str.?));
@@ -657,7 +650,7 @@ pub const MemberBase = extern struct {
     }
 
     pub fn notifyDelete(self: *Self, atom: *Atom, oldvalue: *Object) !void {
-        if (self.shouldNotify(atom)) {
+        if (self.shouldNotify(atom, .DELETE)) {
             var change: *Dict = try Dict.new();
             defer change.decref();
             try change.set(@ptrCast(type_str.?), @ptrCast(delete_str.?));
@@ -699,12 +692,15 @@ pub const MemberBase = extern struct {
 
     // Mask for slot's data bits
     pub inline fn slotDataMask(self: Self) usize {
-        return (@as(usize, self.info.width) + 1) << self.info.offset;
+        const bitwidth = self.info.width + 1;
+        const mask: usize = (@as(usize, 1) << bitwidth) - 1;
+        return mask << self.info.offset;
     }
 
     // Mask for slot's 'is set' bit
     pub inline fn slotSetMask(self: Self) usize {
-        const pos: u6 = self.info.offset + self.info.width + 1;
+        const bitwidth = self.info.width + 1;
+        const pos: u6 = self.info.offset + bitwidth;
         return @as(usize, @as(usize, 1) << pos);
     }
 
@@ -1101,6 +1097,9 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
             self.base.name = undefined_str.?.newref();
             self.base.info.typeid = typeid;
             self.base.info.storage_mode = storage_mode;
+            if (comptime storage_mode == .static and @hasDecl(impl, "default_bitsize")) {
+                self.base.info.width = impl.default_bitsize - 1;
+            }
             return self;
         }
 

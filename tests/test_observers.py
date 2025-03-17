@@ -1,5 +1,5 @@
 import pytest
-from zatom.api import Atom, Int, Typed, ChangeType, observe
+from zatom.api import Atom, Int, Typed, Enum, ChangeType, observe
 
 
 def test_dynamic_observe():
@@ -172,6 +172,40 @@ def test_observe_method():
     b.y = 2
     assert len(changes) == 3
     assert changes[-1] == {"type": "create", "name": "y", "object": b, "value": 2}
+
+
+def test_observe_enum():
+    changes = []
+
+    class A(Atom):
+        mode = Enum("replace", "append", "prepend")
+
+        def _observe_mode(self, change):
+            changes.append(change)
+
+    assert A.mode.offset == 0
+    assert A.mode.bitsize == 2
+
+    a = A()
+    a.mode = "append"
+
+    assert len(changes) == 1
+    assert changes[-1] == {
+        "type": "create",
+        "name": "mode",
+        "object": a,
+        "value": "append",
+    }
+    a.mode = "prepend"
+
+    assert len(changes) == 2
+    assert changes[-1] == {
+        "type": "update",
+        "name": "mode",
+        "object": a,
+        "oldvalue": "append",
+        "value": "prepend",
+    }
 
 
 def test_static_observe():

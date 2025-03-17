@@ -135,30 +135,29 @@ pub const Atom = extern struct {
     // Internal observer api
     // --------------------------------------------------------------------------
     // It should be a string, but it can raise an error if topic is not hashable
-    pub fn hasDynamicObservers(self: *Self, topic: *Str) !bool {
+    pub fn hasDynamicObservers(self: *Self, topic: *Str, change_types: u8) !bool {
         if (self.dynamicObserverPool()) |pool| {
-            return try pool.hasTopic(topic);
+            return try pool.hasAnyObserver(topic, change_types);
         }
         return false;
     }
 
-    pub fn hasDynamicObserver(self: *Self, topic: *Str, observer: *Object) !bool {
+    pub fn hasDynamicObserver(self: *Self, topic: *Str, observer: *Object, change_types: u8) !bool {
         if (self.dynamicObserverPool()) |pool| {
-            return try pool.hasObserver(topic, observer, @intFromEnum(ChangeType.ANY));
+            return try pool.hasObserver(topic, observer, change_types);
         }
         return false;
     }
 
-    pub fn hasStaticObservers(self: *Self, topic: *Str) !bool {
+    pub fn hasStaticObservers(self: *Self, topic: *Str, change_types: u8) !bool {
         if (self.staticObserverPool()) |pool| {
-            return try pool.hasTopic(topic);
+            return try pool.hasAnyObserver(topic, change_types);
         }
         return false;
     }
 
-    pub fn hasAnyObservers(self: *Self, topic: *Str) !bool {
-        return (try self.hasStaticObservers(topic) or
-            try self.hasDynamicObservers(topic));
+    pub fn hasAnyObservers(self: *Self, topic: *Str, change_type: ChangeType) !bool {
+        return (try self.hasStaticObservers(topic, @intFromEnum(change_type)) or try self.hasDynamicObservers(topic, @intFromEnum(change_type)));
     }
 
     // Assumes caller has checked observer is callable or str
@@ -211,7 +210,7 @@ pub const Atom = extern struct {
             return py.returnFalse();
         }
         if (n == 1 and Str.check(args[0])) {
-            return py.returnBool(self.hasDynamicObservers(@ptrCast(args[0])) catch return null);
+            return py.returnBool(self.hasDynamicObservers(@ptrCast(args[0]), @intFromEnum(ChangeType.ANY)) catch return null);
         }
         return py.typeErrorObject(null, "Invalid arguments. Signature is has_observers(topic: Optional[str] = None)", .{});
     }
@@ -220,7 +219,7 @@ pub const Atom = extern struct {
         if (n != 2 or !Str.check(args[0]) or !args[1].isCallable()) {
             return py.typeErrorObject(null, "Invalid arguments. Signature is has_observer(topic: str, observer: Callable)", .{});
         }
-        return py.returnBool(self.hasDynamicObserver(@ptrCast(args[0]), args[1]) catch return null);
+        return py.returnBool(self.hasDynamicObserver(@ptrCast(args[0]), args[1], @intFromEnum(ChangeType.ANY)) catch return null);
     }
 
     pub fn observe(self: *Self, args: [*]*Object, n: isize) ?*Object {

@@ -8,10 +8,13 @@ const std = @import("std");
 
 const member = @import("member.zig");
 const atom_meta = @import("atom_meta.zig");
+const AtomMeta = atom_meta.AtomMeta;
 const atom = @import("atom.zig");
 const observation = @import("observation.zig");
 const observer_pool = @import("observer_pool.zig");
 const modes = @import("modes.zig");
+const PropertyMember = @import("members/property.zig").PropertyMember;
+
 pub const package_name = "zatom";
 
 pub const DebugLevel = struct {
@@ -74,10 +77,17 @@ pub export fn atom_modexec(mod: *py.Module) c_int {
 }
 
 pub fn add_member(_: *Module, args: [*]*Object, n: isize) ?*Object {
-    if (n != 3 or !atom_meta.AtomMeta.check(args[0])) {
-        return py.typeErrorObject(null, "Expected AtomMeta class", .{});
+    if (n != 3 or !AtomMeta.check(args[0]) or !py.Str.check(args[1]) or !member.MemberBase.check(args[2])) {
+        return py.typeErrorObject(null, "Invalid arguments. Signature is add_member(cls: Atom, name: str, member: Member)", .{});
     }
-    return atom_meta.AtomMeta.add_member(@ptrCast(args[0]), args[1..3], 2);
+    return AtomMeta.add_member(@ptrCast(args[0]), args[1..3], 2);
+}
+
+pub fn reset_property(_: *Module, args: [*]*Object, n: isize) ?*Object {
+    if (n != 2 or !PropertyMember.check(args[0]) or !AtomMeta.check(args[1])) {
+        return py.typeErrorObject(null, "Invalid arguments. Signature is reset_property(property: Property, atom: Atom)", .{});
+    }
+    return PropertyMember.Impl.reset(@ptrCast(args[0]), @ptrCast(args[1]));
 }
 
 pub fn observe(_: *Module, args: *Tuple, kwargs: ?*Dict) ?*Object {
@@ -86,6 +96,7 @@ pub fn observe(_: *Module, args: *Tuple, kwargs: ?*Dict) ?*Object {
 
 var module_methods = [_]py.MethodDef{
     .{ .ml_name = "add_member", .ml_meth = @constCast(@ptrCast(&add_member)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Add an atom member to a class" },
+    .{ .ml_name = "reset_property", .ml_meth = @constCast(@ptrCast(&reset_property)), .ml_flags = py.c.METH_FASTCALL, .ml_doc = "Reset the cached value of a property and notify observers" },
     .{ .ml_name = "observe", .ml_meth = @constCast(@ptrCast(&observe)), .ml_flags = py.c.METH_VARARGS | py.c.METH_KEYWORDS, .ml_doc = "Add a static observer on a method" },
     .{}, // sentinel
 };
