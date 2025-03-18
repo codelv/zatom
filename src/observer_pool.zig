@@ -122,12 +122,19 @@ pub const PoolGuard = struct {
 };
 
 pub const ObserverPool = struct {
-    // TODO: Convert to unmanaged...
+    pub const HashMapContext = struct {
+        pub fn hash(_: HashMapContext, k: isize) u64 {
+            return @bitCast(k);
+        }
+        pub fn eql(_: HashMapContext, a: isize, b: isize) bool {
+            return a == b;
+        }
+    };
     // Mapping of observer hash to ObserverInfo
-    pub const ObserverMap = std.AutoHashMapUnmanaged(isize, ObserverInfo);
+    pub const ObserverMap = std.HashMapUnmanaged(isize, ObserverInfo, HashMapContext, 80);
 
     // Mapping of member index to ObserverMap
-    pub const TopicMap = std.AutoHashMapUnmanaged(isize, ObserverMap);
+    pub const TopicMap = std.HashMapUnmanaged(isize, ObserverMap, HashMapContext, 80);
 
     // Map of member index to observer
     // modifcation of the map invalidates

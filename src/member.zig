@@ -45,6 +45,41 @@ pub const ValidateMode = enum(u2) { default = 0, call_old_new = 1, call_name_old
 pub const CoerceMode = enum(u1) { no = 0, yes = 1 };
 pub const Observable = enum(u2) { no = 0, yes = 1, maybe = 2 };
 
+pub fn countAllMembers() usize {
+    comptime {
+        var n: usize = 0;
+        for (all_modules) |mod| {
+            n += mod.all_members.len;
+        }
+        return n;
+    }
+}
+
+pub fn allMembers() [countAllMembers()]type {
+    comptime {
+        const n = countAllMembers();
+        var members_by_typeid = [_]?type{null} ** n;
+        for (all_modules) |mod| {
+            for (mod.all_members) |M| {
+                const i = M.typeid - 1;
+                if (members_by_typeid[i] != null) {
+                    @compileError(std.fmt.comptimePrint("Member with typeid={} is duplicated", .{M.typeid}));
+                }
+                members_by_typeid[i] = M;
+            }
+        }
+        var members: [n]type = undefined;
+        for (members_by_typeid, 0..) |member, i| {
+            if (member) |M| {
+                members[i] = M;
+            } else {
+                @compileError(std.fmt.comptimePrint("Member with typeid={} missing", .{i + 1}));
+            }
+        }
+        return members;
+    }
+}
+
 pub const MemberInfo = packed struct {
     index: u16 = 0,
     width: u6 = 0, // bit size -1. A value of 0 means 1 one bit
@@ -65,6 +100,7 @@ pub const MemberBase = extern struct {
     // Reference to the type. This is set in Fready
     pub var TypeObject: ?*Type = null;
     const Self = @This();
+    pub const typeid = 0;
 
     base: Object,
     metadata: ?*Dict = null,
@@ -260,17 +296,13 @@ pub const MemberBase = extern struct {
             }
         }
         @setEvalBranchQuota(10000);
-        inline for (all_modules) |mod| {
-            if (comptime @hasDecl(mod, "all_members")) {
-                inline for (mod.all_members) |M| {
-                    if (self.info.typeid == M.typeid) {
-                        return M.default(@ptrCast(self), atom) catch null;
-                    }
-                }
-            }
-        }
         if (self.info.typeid == 0) {
             return py.returnNone();
+        }
+        inline for (comptime allMembers()) |M| {
+            if (self.info.typeid == M.typeid) {
+                return M.default(@ptrCast(self), atom) catch null;
+            }
         }
         return py.systemErrorObject(null, "default cast failed: invalid member typeid {}", .{self.info.typeid});
     }
@@ -509,17 +541,13 @@ pub const MemberBase = extern struct {
         // Zig is able to inline validation of everything except the custom
         // containers that require coercion.
         @setEvalBranchQuota(10000);
-        inline for (all_modules) |mod| {
-            if (comptime @hasDecl(mod, "all_members")) {
-                inline for (mod.all_members) |M| {
-                    if (self.info.typeid == M.typeid) {
-                        return M.validate(@ptrCast(self), atom, oldvalue, newvalue);
-                    }
-                }
-            }
-        }
         if (self.info.typeid == 0) {
             return newvalue.newref();
+        }
+        inline for (comptime allMembers()) |M| {
+            if (self.info.typeid == M.typeid) {
+                return M.validate(@ptrCast(self), atom, oldvalue, newvalue);
+            }
         }
         try py.systemError("validate cast failed: invalid member typeid {}", .{self.info.typeid});
         unreachable;
@@ -528,13 +556,9 @@ pub const MemberBase = extern struct {
     // Check if this member can observe the given topic
     // May return null if it cannot be known
     pub fn checkTopic(self: *Self, topic: *Str) py.Error!Observable {
-        inline for (all_modules) |mod| {
-            if (comptime @hasDecl(mod, "all_members")) {
-                inline for (mod.all_members) |M| {
-                    if (self.info.typeid == M.typeid) {
-                        return M.checkTopic(@ptrCast(self), topic);
-                    }
-                }
+        inline for (comptime allMembers()) |M| {
+            if (self.info.typeid == M.typeid) {
+                return M.checkTopic(@ptrCast(self), topic);
             }
         }
         return .maybe;
@@ -1200,17 +1224,17 @@ pub fn Member(comptime type_name: [:0]const u8, comptime id: u5, comptime impl: 
 }
 
 const all_modules = .{
-    @import("members/scalars.zig"),
+    @import("members/coerced.zig"),
+    @import("members/dict.zig"),
     @import("members/enum.zig"),
+    @import("members/event.zig"),
     @import("members/instance.zig"),
     @import("members/list.zig"),
-    @import("members/dict.zig"),
-    @import("members/typed.zig"),
-    @import("members/tuple.zig"),
-    @import("members/set.zig"),
-    @import("members/event.zig"),
-    @import("members/coerced.zig"),
     @import("members/property.zig"),
+    @import("members/scalars.zig"),
+    @import("members/set.zig"),
+    @import("members/tuple.zig"),
+    @import("members/typed.zig"),
 };
 
 const all_strings = .{ "undefined", "type", "object", "name", "value", "oldvalue", "key", "create", "update", "delete", "item", "property" };

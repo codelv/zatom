@@ -10,7 +10,7 @@ const MemberBase = member.MemberBase;
 const StorageMode = member.StorageMode;
 const Member = member.Member;
 
-pub const PropertyMember = Member("Property", 19, struct {
+pub const PropertyMember = Member("Property", 22, struct {
     pub inline fn init(self: *MemberBase, args: *Tuple, kwargs: ?*Dict) !void {
         const kwlist = [_:null][*c]const u8{
             "fget",

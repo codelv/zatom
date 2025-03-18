@@ -4,8 +4,9 @@ from zatom import api as zatom
 
 pytest.importorskip("pytest_benchmark")
 
+atoms = (catom, zatom)
 
-@pytest.mark.parametrize("atom", (catom, zatom, "slots"))
+@pytest.mark.parametrize("atom", (*atoms, "slots"))
 @pytest.mark.benchmark(group="init")
 def test_create_small_obj(benchmark, atom):
     if atom == "slots":
@@ -23,7 +24,7 @@ def test_create_small_obj(benchmark, atom):
     benchmark.pedantic(Point, rounds=10000, iterations=100)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom, "slots"))
+@pytest.mark.parametrize("atom", (*atoms, "slots"))
 @pytest.mark.benchmark(group="getattr-int")
 def test_getattr_int(benchmark, atom):
     if atom == "slots":
@@ -42,7 +43,7 @@ def test_getattr_int(benchmark, atom):
     benchmark.pedantic(lambda: p.x, rounds=10000, iterations=100)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom, "slots"))
+@pytest.mark.parametrize("atom", (*atoms, "slots"))
 @pytest.mark.benchmark(group="getattr-bool")
 def test_getattr_bool(benchmark, atom):
     if atom == "slots":
@@ -81,7 +82,7 @@ def test_getattr_int_property(benchmark):
     benchmark.pedantic(lambda: p.x, rounds=10000, iterations=100)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom, "slots"))
+@pytest.mark.parametrize("atom", (*atoms, "slots"))
 @pytest.mark.benchmark(group="setattr-int")
 def test_setattr_int(benchmark, atom):
     if atom == "slots":
@@ -103,7 +104,7 @@ def test_setattr_int(benchmark, atom):
     benchmark.pedantic(add, rounds=10000, iterations=100)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom, "slots"))
+@pytest.mark.parametrize("atom", (*atoms, "slots"))
 @pytest.mark.benchmark(group="setattr-bool")
 def test_setattr_bool(benchmark, atom):
     if atom == "slots":
@@ -125,7 +126,7 @@ def test_setattr_bool(benchmark, atom):
     benchmark.pedantic(add, rounds=10000, iterations=100)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.parametrize("atom", atoms)
 @pytest.mark.benchmark(group="validate-coerced")
 def test_setattr_coerced(benchmark, atom):
     class Obj(atom.Atom):
@@ -140,7 +141,7 @@ def test_setattr_coerced(benchmark, atom):
     benchmark.pedantic(run, rounds=10000, iterations=100)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.parametrize("atom", atoms)
 @pytest.mark.benchmark(group="validate-range")
 def test_validate_range(benchmark, atom):
     class Obj(atom.Atom):
@@ -160,7 +161,7 @@ def test_validate_range(benchmark, atom):
     benchmark.pedantic(run, rounds=10000, iterations=100)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.parametrize("atom", atoms)
 @pytest.mark.benchmark(group="validate-range-float")
 def test_validate_range_float(benchmark, atom):
     class Obj(atom.Atom):
@@ -180,7 +181,7 @@ def test_validate_range_float(benchmark, atom):
     benchmark.pedantic(run, rounds=10000, iterations=100)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.parametrize("atom", atoms)
 @pytest.mark.benchmark(group="validate-set")
 def test_validate_set_int(benchmark, atom):
     class Obj(atom.Atom):
@@ -198,7 +199,7 @@ def test_validate_set_int(benchmark, atom):
     benchmark.pedantic(update, rounds=100, iterations=10)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.parametrize("atom", atoms)
 @pytest.mark.benchmark(group="validate-tuple")
 def test_validate_tuple_str(benchmark, atom):
     class Obj(atom.Atom):
@@ -216,7 +217,7 @@ def test_validate_tuple_str(benchmark, atom):
     benchmark.pedantic(update, rounds=100, iterations=10)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.parametrize("atom", atoms)
 @pytest.mark.benchmark(group="validate-list")
 def test_validate_list_int(benchmark, atom):
     class Obj(atom.Atom):
@@ -234,7 +235,7 @@ def test_validate_list_int(benchmark, atom):
     benchmark.pedantic(update, rounds=100, iterations=10)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.parametrize("atom", atoms)
 @pytest.mark.benchmark(group="list-append")
 def test_typed_list_append_int(benchmark, atom):
     if atom == "slots":
@@ -289,7 +290,7 @@ def test_typed_list_extend_int(benchmark, atom):
     benchmark.pedantic(update, rounds=100, iterations=10)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.parametrize("atom", atoms)
 @pytest.mark.benchmark(group="observer-decorated-notify")
 def test_observer_decorated_notify(benchmark, atom):
     class Obj(atom.Atom):
@@ -307,7 +308,7 @@ def test_observer_decorated_notify(benchmark, atom):
     benchmark.pedantic(update, rounds=1000, iterations=10)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.parametrize("atom", atoms)
 @pytest.mark.benchmark(group="observer-extended-notify")
 def test_observer_decorated_notify(benchmark, atom):
     class Point(atom.Atom):
@@ -330,7 +331,7 @@ def test_observer_decorated_notify(benchmark, atom):
     benchmark.pedantic(update, rounds=1000, iterations=10)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.parametrize("atom", atoms)
 @pytest.mark.benchmark(group="observer-static-notify")
 def test_observer_static_notify(benchmark, atom):
     class Obj(atom.Atom):
@@ -349,7 +350,7 @@ def test_observer_static_notify(benchmark, atom):
     benchmark.pedantic(update, rounds=1000, iterations=10)
 
 
-@pytest.mark.parametrize("atom", (catom, zatom))
+@pytest.mark.parametrize("atom", atoms)
 @pytest.mark.benchmark(group="observer-dynamic-notify")
 def test_observer_dynamic_notify(benchmark, atom):
     class Obj(atom.Atom):

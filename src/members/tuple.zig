@@ -73,12 +73,12 @@ pub const TupleMember = Member("Tuple", 15, struct {
     }
 });
 
-pub const all_types = .{
+pub const all_members = .{
     TupleMember,
 };
 
 pub fn initModule(mod: *py.Module) !void {
-    inline for (all_types) |T| {
+    inline for (all_members) |T| {
         try T.initType();
         errdefer T.deinitType();
         try mod.addObjectRef(T.TypeName, @ptrCast(T.TypeObject.?));
@@ -87,7 +87,7 @@ pub fn initModule(mod: *py.Module) !void {
 
 pub fn deinitModule(mod: *py.Module) void {
     _ = mod;
-    inline for (all_types) |T| {
+    inline for (all_members) |T| {
         T.deinitType();
     }
 }
