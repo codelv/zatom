@@ -3,6 +3,8 @@
 `zatom` is an alternative to [Atom](https://github.com/nucleic/atom) that is rewritten in [zig](https://ziglang.org/).
 using [py.zig](https://github.com/codelv/py.zig). 
 
+> Note: This project was done mainly for learning purposes. After finally completing this project and doing some real world benchmarks it was actually about 5% slower and used slightly more memory (with some exceptions). I made it public to document usage of [py.zig](https://github.com/codelv/py.zig).
+
 It aims to be mostly backwards compatible but drops several rarely used features of atom 
 that may be breaking depending on the usage (see below).  It is compatible with [enaml](https://github.com/nucleic/atom).
 
@@ -21,7 +23,6 @@ to create and use types with inlined slots for up to 64 members (an arbitrary li
 - Some members (eg `Bool`, `Enum` and sometimes `Range` ) have `static` storage so multiple members can be bit-packed into a single slot.
 - zatom's uses a custom allocator that uses `PyMem_*` so internal memory usage is properly tracked by tracemalloc and other tools.
 - No C++.
-
 
 #### Breaking changes
 
